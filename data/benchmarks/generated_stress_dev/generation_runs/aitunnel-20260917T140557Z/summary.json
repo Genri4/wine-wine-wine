@@ -1,0 +1,86 @@
+{
+  "cost_status": "reported_by_provider",
+  "endpoint": "https://api.aitunnel.ru/v1/images/generations",
+  "failed": 0,
+  "generated": 4,
+  "model": "gpt-image-2.5-sunburst",
+  "not_attempted": 0,
+  "quality": "low",
+  "reported_usage": [
+    {
+      "balance": 496.86,
+      "completion_tokens": 196,
+      "completion_tokens_details": {
+        "image_tokens": 196,
+        "reasoning_tokens": 0
+      },
+      "cost_rub": 3.14,
+      "prompt_tokens": 1625,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "total_tokens": 1821
+    },
+    {
+      "balance": 493.71,
+      "completion_tokens": 196,
+      "completion_tokens_details": {
+        "image_tokens": 196,
+        "reasoning_tokens": 0
+      },
+      "cost_rub": 3.15,
+      "prompt_tokens": 1636,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "total_tokens": 1832
+    },
+    {
+      "balance": 490.56,
+      "completion_tokens": 196,
+      "completion_tokens_details": {
+        "image_tokens": 196,
+        "reasoning_tokens": 0
+      },
+      "cost_rub": 3.15,
+      "prompt_tokens": 1627,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "total_tokens": 1823
+    },
+    {
+      "balance": 487.41,
+      "completion_tokens": 196,
+      "completion_tokens_details": {
+        "image_tokens": 196,
+        "reasoning_tokens": 0
+      },
+      "cost_rub": 3.15,
+      "prompt_tokens": 1626,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "total_tokens": 1822
+    }
+  ],
+  "requested": 4,
+  "requests_csv": "data/benchmarks/generated_stress_dev/generation_runs/aitunnel-20260917T140557Z/requests.csv",
+  "run_id": "aitunnel-20260917T140557Z",
+  "scope": {
+    "mode": "pilot",
+    "pilot_products": 1,
+    "products": 1,
+    "requests": 4,
+    "scenarios": [
+      "slight_angle",
+      "glare_bad_light",
+      "distance_crop",
+      "handheld"
+    ]
+  },
+  "size": "1024x1024",
+  "skipped_existing": 0,
+  "stopped_on_error": null,
+  "total_cost_rub": 12.59
+}

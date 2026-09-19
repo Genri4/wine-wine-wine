@@ -1,0 +1,12 @@
+{
+  "canonical_products": 2103,
+  "catalog_version": "catalog-v1",
+  "generated_at_utc": "2026-09-16T06:01:47.692736Z",
+  "manifest_sha256": "1c9d830c424f041d42ff52ed1b85298c531551c3757c54a2d557a810d634331f",
+  "matched_manifest_products": 2042,
+  "matched_without_existing_reference": 0,
+  "source_manifest": "data/processed/catalog_manifest.csv",
+  "source_reference_images_are_not_copied": true,
+  "unresolved_products": 61,
+  "usable_products": 2042
+}

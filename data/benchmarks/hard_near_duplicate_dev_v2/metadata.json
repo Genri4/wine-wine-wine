@@ -1,0 +1,32 @@
+{
+  "benchmark_version": "hard-near-duplicate-v2",
+  "candidate_universe": "existing hard_near_duplicate_dev v1 families",
+  "catalog_products_with_reference": 2042,
+  "catalog_share": 0.28158667972575907,
+  "families": 256,
+  "metrics": {
+    "mean_latency_ms": 19.696495652173912,
+    "mrr": 0.8276231884057971,
+    "p50_latency_ms": 18.7685,
+    "p95_latency_ms": 25.71615,
+    "query_count": 1150,
+    "recall_at_5": 0.9965217391304347,
+    "top1_accuracy": 0.6843478260869565
+  },
+  "model_changed": false,
+  "prediction_source": "artifacts/experiments/siglip2_synthetic_dev_20260916T062142Z/predictions.csv",
+  "products": 575,
+  "queries": 1150,
+  "query_source": "synthetic_dev manifest; query ids and bytes are reused exactly",
+  "selection_rule": "at least 2 of 4 strong signals; metadata-only relation is insufficient",
+  "strong_signals": {
+    "image_similarity": "deterministic perceptual/pixel fingerprint used by web-extra duplicate guard",
+    "normalized_name_similarity": {
+      "sequence_ratio": 0.8,
+      "token_jaccard": 0.75
+    },
+    "real_confusion_rank_2_5": "frozen SigLIP2 Top-1 error with target rank 2..5",
+    "small_top1_top2_margin": 0.02
+  },
+  "synthetic_dev_changed": false
+}

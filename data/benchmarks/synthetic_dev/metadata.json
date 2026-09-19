@@ -1,0 +1,14 @@
+{
+  "benchmark_version": "synthetic-dev-v1",
+  "generated_at_utc": "2026-09-16T06:12:22.324735Z",
+  "internal_comparative_benchmark_only": true,
+  "manifest_sha256": "c94d1f4d1a78e469d6721083918de13e4360058fe44486e408926de352a095a5",
+  "products": 2042,
+  "queries": 4084,
+  "reference_images_unchanged": true,
+  "seed": 20260916,
+  "source_catalog_manifest": "data/processed/catalog_manifest.csv",
+  "source_catalog_manifest_sha256": "1c9d830c424f041d42ff52ed1b85298c531551c3757c54a2d557a810d634331f",
+  "transform_version": "synthetic-dev-transforms-v2",
+  "variants_per_product": 2
+}

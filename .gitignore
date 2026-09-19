@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+
+artifacts/*
+!artifacts/.gitkeep
+experiments/runs/*
+!experiments/runs/.gitkeep
+
+# Raw data — 2.1 GB archives, too large for git
+raw_data/
+
+# Heavy image directories — keep manifests (csv/json/md) only
+data/processed/reference_images/
+data/benchmarks/synthetic_dev/queries/
+data/benchmarks/generated_stress_dev/generated_raw/
+data/benchmarks/generated_stress_dev/generated_raw_*/
+data/benchmarks/generated_stress_dev_pilot32/generated_raw/
+data/benchmarks/web_extra_dev/images/

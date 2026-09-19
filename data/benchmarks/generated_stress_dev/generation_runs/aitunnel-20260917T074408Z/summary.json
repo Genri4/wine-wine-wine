@@ -1,0 +1,29 @@
+{
+  "cost_status": "unavailable_in_provider_response",
+  "endpoint": "https://api.aitunnel.ru/v1/images/edits",
+  "failed": 4,
+  "generated": 0,
+  "model": "gpt-image-2.5-sunburst",
+  "not_attempted": 0,
+  "quality": "low",
+  "reported_usage": null,
+  "requested": 4,
+  "requests_csv": "data/benchmarks/generated_stress_dev/generation_runs/aitunnel-20260917T074408Z/requests.csv",
+  "run_id": "aitunnel-20260917T074408Z",
+  "scope": {
+    "mode": "pilot",
+    "pilot_products": 1,
+    "products": 1,
+    "requests": 4,
+    "scenarios": [
+      "slight_angle",
+      "glare_bad_light",
+      "distance_crop",
+      "handheld"
+    ]
+  },
+  "size": "1024x1024",
+  "skipped_existing": 0,
+  "stopped_on_error": null,
+  "total_cost_rub": null
+}

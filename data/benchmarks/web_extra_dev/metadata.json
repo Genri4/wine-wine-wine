@@ -1,0 +1,26 @@
+{
+  "accepted": 5,
+  "benchmark_version": "web-extra-v1",
+  "catalog_manifest": "data/processed/catalog_manifest.csv",
+  "catalog_products_without_exact_sitemap_slug": 61,
+  "downloaded_candidates": 1981,
+  "duplicate_policy": {
+    "aspect_ratio_threshold": 0.02,
+    "center_phash_hamming_threshold": 240,
+    "center_thumbnail_mean_abs_diff_threshold": 0.12,
+    "conservative": true,
+    "exact_content_hash": true,
+    "perceptual_hash": "32x32 grayscale average hash",
+    "phash_hamming_threshold": 180,
+    "thumbnail_mean_abs_diff_threshold": 0.06
+  },
+  "exact_catalog_slug_matches": 1981,
+  "generated_images_used": false,
+  "manual_review": 0,
+  "rechecked_existing_downloads": true,
+  "rejected_reference_duplicates": 1976,
+  "retrieval_timestamp": "2026-09-16T13:24:33.176034Z",
+  "sitemap_sha256": "20ab47c2590e72f24b2439ec217a3472ef83a3e4f76010cbbdf94f5af907fc51",
+  "sitemap_url": "https://vino-svoe.ru/wines-sitemap.xml",
+  "workers": 4
+}

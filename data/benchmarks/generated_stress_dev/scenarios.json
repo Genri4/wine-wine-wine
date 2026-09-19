@@ -1,0 +1,66 @@
+{
+  "scenario_version": "generated-stress-scenarios-v1",
+  "scenarios": [
+    {
+      "scenario_id": "slight_angle",
+      "title": "Slight angle",
+      "prompt_template": "Preserve the exact original wine bottle and product identity. Preserve the exact label design, winery logo, wine name, vintage/year, grape information and all printed text. Do not redesign, rewrite, replace or invent any part of the label. Only change the photography conditions and surrounding environment. Use the attached catalog reference as the source. Create a realistic smartphone photograph of the same bottle at a slight 10–30 degree yaw with mild perspective distortion. Keep the bottle and front label clearly visible and recognizable. Use natural handheld framing and moderate indoor ambient light. Do not introduce any other bottle or change the product.",
+      "constraints": [
+        "yaw approximately 10–30 degrees",
+        "mild perspective distortion",
+        "label remains readable"
+      ],
+      "negative_constraints": [
+        "no 60–90 degree angle",
+        "no label redesign",
+        "no product identity change"
+      ]
+    },
+    {
+      "scenario_id": "glare_bad_light",
+      "title": "Glare and bad light",
+      "prompt_template": "Preserve the exact original wine bottle and product identity. Preserve the exact label design, winery logo, wine name, vintage/year, grape information and all printed text. Do not redesign, rewrite, replace or invent any part of the label. Only change the photography conditions and surrounding environment. Use the attached catalog reference as the source. Create a realistic smartphone photo taken in a shop or home under warm, uneven indoor lighting. Add a plausible mild glass reflection or glare on part of the bottle, but keep the front label and printed identity readable to a person. Keep the scene moderately difficult, not extreme, and do not introduce any other bottle or change the product.",
+      "constraints": [
+        "warm uneven indoor lighting",
+        "mild plausible glass glare",
+        "label remains readable"
+      ],
+      "negative_constraints": [
+        "no fully obscured label",
+        "no extreme bloom",
+        "no label redesign"
+      ]
+    },
+    {
+      "scenario_id": "distance_crop",
+      "title": "Distance and crop",
+      "prompt_template": "Preserve the exact original wine bottle and product identity. Preserve the exact label design, winery logo, wine name, vintage/year, grape information and all printed text. Do not redesign, rewrite, replace or invent any part of the label. Only change the photography conditions and surrounding environment. Use the attached catalog reference as the source. Create a realistic smartphone photograph from farther away, with the bottle occupying a smaller part of the frame and believable shelf or store surroundings. Include a slightly imperfect crop and natural depth or background context while keeping the complete bottle and front label recognizable. Do not introduce another bottle or change the product.",
+      "constraints": [
+        "bottle smaller in frame",
+        "realistic shelf/background",
+        "slightly imperfect crop"
+      ],
+      "negative_constraints": [
+        "no unreadably tiny bottle",
+        "no missing front label",
+        "no product identity change"
+      ]
+    },
+    {
+      "scenario_id": "handheld",
+      "title": "Handheld smartphone",
+      "prompt_template": "Preserve the exact original wine bottle and product identity. Preserve the exact label design, winery logo, wine name, vintage/year, grape information and all printed text. Do not redesign, rewrite, replace or invent any part of the label. Only change the photography conditions and surrounding environment. Use the attached catalog reference as the source. Create an ordinary imperfect handheld smartphone photo of the same bottle with a mild tilt, subtle motion blur, slightly imperfect framing and a plausible everyday background. Keep the bottle, front label and printed identity sufficiently clear for a person to recognize. Do not introduce another bottle or change the product.",
+      "constraints": [
+        "mild motion blur",
+        "small tilt",
+        "imperfect handheld framing",
+        "realistic background"
+      ],
+      "negative_constraints": [
+        "no severe blur",
+        "no fully blocked label",
+        "no product identity change"
+      ]
+    }
+  ]
+}
