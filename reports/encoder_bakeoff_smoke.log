@@ -1,0 +1,29 @@
+=== PE-Core-L-14-336 ===
+checkpoint downloaded: /home/genri/.cache/huggingface/hub/models--facebook--PE-Core-L14-336/snapshots/bafb0f76541d399057e980a25947f67acec76575/PE-Core-L14-336.pt
+PE FAILED: RuntimeError: Error(s) in loading state_dict for CustomTextCLIP:
+	Missing key(s) in state_dict: "visual.trunk.cls_token", "visual.trunk.pos_embed", "visual.trunk.patch_embed.proj.weight", "visual.trunk.norm_pre.weight", "visual.trunk.norm_pre.bias", "visual.trunk.blocks.0.norm1.weight", "visual.trunk.blocks.0.nor
+=== DFN5B ViT-H-14-378 ===
+converting /home/genri/.cache/huggingface/hub/models--apple--dfn5b-clip-vit-h-14-378/snapshots/01b771ed0d1395ca5ffdd279897d665ebe00dfd2/open_clip_pytorch_model.bin -> /mnt/d/project/My_Wine/artifacts/reference_embeddings/_converted/dfn5b_h14_378_fp16.pt
+converted ok: 1.84 GB
+converting /home/genri/.cache/huggingface/hub/models--facebook--PE-Core-L14-336/snapshots/bafb0f76541d399057e980a25947f67acec76575/PE-Core-L14-336.pt -> /mnt/d/project/My_Wine/artifacts/reference_embeddings/_converted/pe_core_l14_336_fp16.pt
+converted ok: 1.25 GB
+{
+ "dim": 1024,
+ "params_m": 986.7,
+ "dtype": "torch.float16",
+ "preprocess_cfg": {
+  "mean": [
+   0.48145466,
+   0.4578275,
+   0.40821073
+  ],
+  "std": [
+   0.26862954,
+   0.26130258,
+   0.27577711
+  ],
+  "size": 378,
+  "interpolation": "bicubic",
+  "resize_mode": "squash"
+ }
+}

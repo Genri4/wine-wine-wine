@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-from .preprocessing import preprocess_image
+from .preprocessing import load_rgb_image, preprocess_image
 
 
 SUPPORTED_MODEL_NAMES = ("resnet18", "resnet50", "dinov2", "siglip")
@@ -168,13 +168,21 @@ class VisualEncoder:
         paths = [Path(path) for path in image_paths]
         if not paths:
             return []
+        images = [load_rgb_image(path) for path in paths]
+        return self.encode_pil(images)
+
+    def encode_pil(self, images: Sequence[Any]) -> list[list[float]]:
+        """Encode already-loaded images with the same pipeline as ``encode``."""
+
+        if not images:
+            return []
 
         torch = self._torch
         embeddings: list[list[float]] = []
-        for start in range(0, len(paths), self.batch_size):
-            batch_paths = paths[start : start + self.batch_size]
+        for start in range(0, len(images), self.batch_size):
+            batch_images = images[start : start + self.batch_size]
             batch = torch.stack(
-                [preprocess_image(path, self._transform) for path in batch_paths]
+                [self._transform(image) for image in batch_images]
             ).to(self.device)
             with torch.inference_mode():
                 output = self._forward(batch)
