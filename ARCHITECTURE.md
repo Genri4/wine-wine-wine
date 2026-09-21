@@ -12,6 +12,72 @@ canonical catalog
 → error analysis
 ```
 
+## Query view strategies
+
+Query-side preprocessing is a frozen-encoder inference concern and is defined
+in `src/recognition/view_strategy.py`. Exactly one fixed strategy is applied
+to every query of a run; views and aggregation never depend on the target,
+scenario, or subset:
+
+- `baseline_full` — one full-image view; the frozen reference baseline.
+- `preprocessing_v1` — full + center 85% + center 70% views of the query,
+  encoded in one batched forward pass, ranked by mean similarity. Evaluated
+  in `reports/preprocessing_v1_evaluation.md`: strong safe recovery on
+  generated-stress queries (+14.8pp R@5 with 0 correct→wrong Top-1 flips) but
+  a real synthetic_dev (−3.8pp Top-1) and hard_v2 (−2.3pp Top-1) regression.
+  It is therefore **not** the unconditional default; a conditional
+  (confidence-gated) policy is a separate future decision.
+- `confidence_gated_v1` — the current retrieval default: run the full-image
+  ranking first, then fall back to crop85+crop70 (reusing the full embedding,
+  mean aggregation identical to preprocessing_v1) only when
+  `top1_score < 0.8824`. Frozen by product-level calibration
+  (`reports/confidence_gated_v1_evaluation.md`): captures the full
+  generated-stress gain on held-out products, keeps clean quality close to
+  the baseline, ~1.4 views/query on clean data. The gate reads only the
+  full-ranking score distribution; the confidence value stays available for
+  a future user-facing Smart Retry layer, which is a separate concern.
+
+The catalog/reference side is unchanged: one embedding per canonical
+reference image from the validated shared cache.
+
+## OCR reranking stage (frozen so400m backbone)
+
+A conservative post-retrieval stage sits between image Top-5 and the final
+answer; OCR never participates in candidate generation:
+
+```text
+query image
+→ siglip2_so400m_384 retrieval (Top-5)
+→ cached query OCR (PaddleOCR 3.7 local, PP-OCRv5 server det + eslav rec)
+→ text signals per candidate (RapidFuzz, Cyrillic + transliterated keys)
+→ conservative fusion (global alpha, text-margin guard)
+→ final Top-1
+```
+
+Boundaries fixed in `src/recognition/ocr_reranker.py` and frozen by
+calibration (see `reports/so400m_ocr_reranker_report.md`):
+
+- Policy set is closed: `image_only`, `metadata_text_blend`,
+  `reference_ocr_blend`, `combined_text_blend`, `combined_vintage_blend`.
+  Frozen default: `reference_ocr_blend, alpha 0.30`.
+- `alpha` is strictly global — one value per run, never per scenario,
+  family or product. No learned reranker, no LLM, no cloud APIs.
+- Reranking permutes the Top-5 only: the candidate set, Recall@5 and
+  Recall@10 are invariant by construction.
+- The text-margin guard keeps the image Top-1 unless the challenging
+  candidate's text evidence beats the image winner's by ≥ 0.05; empty OCR
+  can never reorder anything.
+- Query OCR and reference OCR are separate caches under
+  `artifacts/ocr_cache/<ocr_model>/`; OCR runs exactly once per unique image
+  (dedup by sha256) and is never re-run by reranking experiments.
+- Calibration is split-level: pilot32 by product (all 4 scenarios of one
+  product share a split), hard_v2 by whole family, synthetic by product,
+  fixed seed fingerprinted in `calibration_split.csv`.
+- Known limits (honest negatives): vintage disambiguation did not move
+  under any policy; the text oracle is at parity with the image baseline on
+  generated stress, so OCR there is non-discriminative rather than unread
+  (99% token coverage, median 9 tokens).
+
 Отдельная ветка generated stress отделена от baseline и вызывает image API
 только по явной команде пользователя:
 

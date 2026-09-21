@@ -33,6 +33,53 @@
 - SLA < 3 sec;
 - local inference/demo.
 
+## Query view strategies
+
+Query preprocessing is a fixed strategy applied identically to every query:
+
+- `baseline_full` — one full-image view (reference baseline).
+- `preprocessing_v1` — full + center 85% + center 70% query views, one
+  batched forward pass, mean similarity. Evaluated in
+  `reports/preprocessing_v1_evaluation.md`; not adopted as an unconditional
+  default because of synthetic/hard Top-1 regression.
+- `confidence_gated_v1` — **current retrieval default**: full-image ranking
+  first, crop85+crop70 fallback (full embedding reused, mean aggregation)
+  only when `top1_score < 0.8824`. Frozen by product-level calibration and
+  validated held-out in `reports/confidence_gated_v1_evaluation.md`.
+
+## OCR reranking (so400m backbone)
+
+On top of the frozen `siglip2_so400m_384` retrieval backbone, a conservative
+local-OCR reranking stage evaluates text evidence inside the image Top-5 only
+(OCR never generates candidates). Frozen default:
+`reference_ocr_blend, alpha 0.30, vintage ±0.05, text margin 0.05` —
+full hard_v2 +1.04pp (16 rescued / 4 broken), synthetic +0.17pp, generated
+pilot32 unchanged; pipeline ~0.28 s mean, far below the 3 s SLA. Engine:
+PaddleOCR 3.7 (PP-OCRv5 server det + East-Slavic rec, GPU, fully local).
+Evaluation and honest negatives (vintage disambiguation not solved, text
+oracle at parity with image baseline on generated stress):
+`reports/so400m_ocr_reranker_report.md`.
+
+Reproduce:
+
+```bash
+.venv/bin/python scripts/build_ocr_cache.py            # once; caches under artifacts/ocr_cache/
+.venv/bin/python scripts/run_so400m_ocr_reranker.py
+.venv/bin/python scripts/ablate_so400m_ocr_policies.py \
+  --run-dir <retrieval-dump-run> --selection-dir <milestone-run>
+```
+
+Query OCR must run exactly once and is cached per benchmark; the same engine
+OCRs all 2042 catalog reference images into a separate cache that never mixes
+with query caches.
+
+Reproduce the comparisons:
+
+```bash
+.venv/bin/python scripts/run_preprocessing_v1_comparison.py
+.venv/bin/python scripts/run_confidence_gated_v1.py
+```
+
 ## Запуск DEV benchmark и baseline
 
 Из корня проекта:
