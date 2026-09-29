@@ -181,6 +181,14 @@ Smart Retry is ready at http://127.0.0.1:8765/web/
 .venv/bin/python scripts/serve_smart_retry.py --ocr-device cpu
 ```
 
+Проверочный `participant_test.sh` по умолчанию обращается к порту `8080`.
+Чтобы использовать его endpoint без дополнительных параметров, запустите
+сервер на этом порту:
+
+```bash
+.venv/bin/python scripts/serve_smart_retry.py --port 8080
+```
+
 По умолчанию сервис слушает только loopback `127.0.0.1`. `--host` открывает
 неаутентифицированные UI/API другим интерфейсам; используйте это только в
 доверенной локальной сети. CPU OCR — вариант совместимости, не замеренный путь
@@ -203,14 +211,30 @@ curl -fsS http://127.0.0.1:8765/web/ -o /dev/null && echo "PASS web UI"
 curl -fsS http://127.0.0.1:8765/data/processed/catalog_manifest.csv -o /dev/null && echo "PASS catalog manifest"
 ```
 
-Проверка контракта организаторов на известном эталонном фото:
+Проверка формата `participant_test.sh` на известном эталонном фото:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:8765/api/predict \
-  -H 'Content-Type: image/webp' \
-  --data-binary @data/processed/reference_images/dva-serdtsa-arinarnoa-kaberne-sovinon-krasnoe-suhoe-135.webp \
+curl -fsS -X POST http://127.0.0.1:8765/v1/eval/predict \
+  -F 'image=@data/processed/reference_images/dva-serdtsa-arinarnoa-kaberne-sovinon-krasnoe-suhoe-135.webp' \
 | python -c 'import json,sys; r=json.load(sys.stdin); expected="dva-serdtsa-arinarnoa-kaberne-sovinon-krasnoe-suhoe-135"; assert r == {"slug": expected}, r; print("PASS", r)'
 ```
+
+Полный последовательный прогон используйте с `queries/` и `queries.tsv`,
+полученными из архива eval. Если сервер работает на стандартном порту `8765`,
+передайте его явно:
+
+```bash
+./participant_test.sh \
+  --images-dir ./queries \
+  --manifest ./queries.tsv \
+  --endpoint 'http://127.0.0.1:8765/v1/eval/predict' \
+  --output ./predictions.jsonl
+```
+
+Runner не перезаписывает существующий `predictions.jsonl`; перед новым прогоном
+удалите или переименуйте предыдущий файл. Для локальных клиентов, которым
+удобно отправлять сырые байты, совместимый `POST /api/predict` по-прежнему
+доступен.
 
 Для UI endpoint используйте то же фото. Здесь ожидается HTTP 200, `status`
 `found` или `retry` и непустой `slug`; этот endpoint также возвращает продукт
@@ -223,9 +247,9 @@ curl -fsS -X POST http://127.0.0.1:8765/api/recognize \
 ```
 
 Некорректный файл для `recognize` должен дать HTTP 200 с `status: retry` и
-`reason: unreadable`; для `/api/predict` он даёт HTTP 400. Параллельный запрос
-во время inference получает HTTP 503 с `Retry-After: 1`; сервис не ставит его
-в очередь. Детали маршрутов и форматов описаны в
+`reason: unreadable`; для evaluator route и `/api/predict` он даёт HTTP 400.
+Параллельный запрос во время inference получает HTTP 503 с `Retry-After: 1`;
+сервис не ставит его в очередь. Детали маршрутов и форматов описаны в
 [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 ## 4. Ручная проверка пользовательских функций

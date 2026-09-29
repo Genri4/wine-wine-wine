@@ -9,6 +9,8 @@ import json
 import sys
 import threading
 import time
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,40 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from recognition.smart_retry import MAX_IMAGE_BYTES, SmartRetryRuntime  # noqa: E402
 from recognition.official_wine_details import get_official_wine_details  # noqa: E402
+
+MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+def _extract_multipart_image(content_type: str, body: bytes) -> bytes:
+    """Extract the single evaluator image from multipart/form-data."""
+    try:
+        mime_message = BytesParser(policy=email_policy).parsebytes(
+            b"MIME-Version: 1.0\r\nContent-Type: "
+            + content_type.encode("ascii")
+            + b"\r\n\r\n"
+            + body
+        )
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise ValueError("invalid_multipart") from exc
+
+    if not mime_message.is_multipart():
+        raise ValueError("invalid_multipart")
+
+    image_parts = [
+        part
+        for part in mime_message.iter_parts()
+        if part.get_content_disposition() == "form-data"
+        and part.get_param("name", header="content-disposition") == "image"
+    ]
+    if len(image_parts) != 1:
+        raise ValueError("expected_one_image_field")
+
+    image_bytes = image_parts[0].get_payload(decode=True)
+    if not image_bytes:
+        raise ValueError("empty_image")
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise ValueError("image_too_large")
+    return image_bytes
 
 
 @lru_cache(maxsize=1)
@@ -131,11 +167,18 @@ class SmartRetryHandler(SimpleHTTPRequestHandler):
         return translated.is_file() or (translated.is_dir() and (translated / "index.html").is_file())
 
     def do_POST(self) -> None:
-        if self.path not in {"/api/recognize", "/api/predict"}:
+        request_path = urlsplit(self.path).path
+        if request_path not in {"/api/recognize", "/api/predict", "/v1/eval/predict"}:
             self._json(404, {"error": "not_found"})
             return
-        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        if content_type not in {"image/jpeg", "image/png", "image/webp", "application/octet-stream"}:
+        content_type_header = self.headers.get("Content-Type", "")
+        content_type = content_type_header.split(";", 1)[0].strip().lower()
+        is_evaluator_request = request_path == "/v1/eval/predict"
+        if is_evaluator_request:
+            if content_type != "multipart/form-data":
+                self._json(415, {"error": "multipart_form_required"})
+                return
+        elif content_type not in {"image/jpeg", "image/png", "image/webp", "application/octet-stream"}:
             self._json(415, {"error": "unsupported_image_type"})
             return
         try:
@@ -146,13 +189,24 @@ class SmartRetryHandler(SimpleHTTPRequestHandler):
         if content_length <= 0:
             self._json(400, {"error": "empty_image"})
             return
-        if content_length > MAX_IMAGE_BYTES:
-            self._json(413, {"reason": "image_too_large"})
+        max_request_bytes = MAX_IMAGE_BYTES + (MAX_MULTIPART_OVERHEAD_BYTES if is_evaluator_request else 0)
+        if content_length > max_request_bytes:
+            self._json(413, {"error": "image_too_large"})
             return
-        image_bytes = self.rfile.read(content_length)
-        if len(image_bytes) != content_length:
+        request_body = self.rfile.read(content_length)
+        if len(request_body) != content_length:
             self._json(400, {"error": "incomplete_image_upload"})
             return
+        if is_evaluator_request:
+            try:
+                image_bytes = _extract_multipart_image(content_type_header, request_body)
+            except ValueError as exc:
+                error = str(exc)
+                status = 413 if error == "image_too_large" else 400
+                self._json(status, {"error": error})
+                return
+        else:
+            image_bytes = request_body
         if not self.inference_status.begin():
             self._json(503, {"error": "recognition_busy"}, {"Retry-After": "1"})
             return
@@ -160,12 +214,12 @@ class SmartRetryHandler(SimpleHTTPRequestHandler):
         started = time.perf_counter()
         outcome = "failed"
         try:
-            if self.path == "/api/predict":
+            if request_path in {"/api/predict", "/v1/eval/predict"}:
                 result = self.runtime.predict_slug(image_bytes)
             else:
                 result = self.runtime.recognize(image_bytes)
         except ValueError as exc:
-            if self.path != "/api/predict":
+            if request_path not in {"/api/predict", "/v1/eval/predict"}:
                 self.log_error("local recognition failed")
                 self._json(500, {"error": "recognition_failed"})
             else:
@@ -182,7 +236,7 @@ class SmartRetryHandler(SimpleHTTPRequestHandler):
         finally:
             duration = time.perf_counter() - started
             self.inference_status.finish(duration, outcome)
-            self.log_message("inference %s result=%s duration=%.3fs", self.path, outcome, duration)
+            self.log_message("inference %s result=%s duration=%.3fs", request_path, outcome, duration)
 
     def log_message(self, format: str, *args: Any) -> None:
         # Avoid logging uploaded file names or recognition payloads.
@@ -207,7 +261,11 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), lambda *a, **kw: BoundHandler(*a, directory=str(ROOT), **kw))
     server.daemon_threads = True
     print(f"Smart Retry is ready at http://{args.host}:{args.port}/web/", flush=True)
-    print("API readiness: /api/health · UI: POST /api/recognize · evaluator contract: POST /api/predict", flush=True)
+    print(
+        "API readiness: /api/health · UI: POST /api/recognize · evaluator contract: "
+        "POST /v1/eval/predict (multipart field: image)",
+        flush=True,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
