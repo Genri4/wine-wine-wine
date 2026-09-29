@@ -11,10 +11,15 @@ dependencies = [
     "torch>=2.0",
     "torchvision>=0.15",
     "Pillow>=9.0",
-    "transformers>=4.45",
+    "numpy>=1.26",
+    # The frozen SIFT descriptors embed cv2.__version__ and reject other versions.
+    "opencv-python-headless==4.10.0.84",
+    # The Smart Retry loader uses the dtype= from_pretrained argument.
+    "transformers>=5.17.0",
 ]
 
 [project.optional-dependencies]
+demo = ["paddleocr==3.7.0"]
 dev = ["pytest>=7.0"]
 
 [tool.setuptools.packages.find]

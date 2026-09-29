@@ -36,6 +36,46 @@ OCR_MODEL_KEY = "paddleocr3.7_ppocrv5_server_det_eslav_v5_mobile_rec"
 
 
 @dataclass(frozen=True)
+class OcrConfig:
+    """One named OCR configuration with its own deterministic cache key."""
+
+    config_key: str
+    cache_key: str
+    kind: str  # "pipeline" (det+rec) or "vl" (PaddleOCR-VL document pipeline)
+    detection_model: str = ""
+    recognition_model: str = ""
+
+
+OCR_CONFIGS: dict[str, OcrConfig] = {
+    # OCR A — current baseline (cache key unchanged for backward compatibility)
+    "current_eslav": OcrConfig(
+        config_key="current_eslav",
+        cache_key=OCR_MODEL_KEY,
+        kind="pipeline",
+        detection_model=DETECTION_MODEL,
+        recognition_model=RECOGNITION_MODEL,
+    ),
+    # OCR B — same detector, generic Cyrillic recognizer
+    "cyrillic": OcrConfig(
+        config_key="cyrillic",
+        cache_key="paddleocr3.7_ppocrv5_server_det_cyrillic_v5_mobile_rec",
+        kind="pipeline",
+        detection_model=DETECTION_MODEL,
+        recognition_model="cyrillic_PP-OCRv5_mobile_rec",
+    ),
+    # OCR C — PaddleOCR-VL 0.9B document-parsing pipeline (local)
+    "paddleocr_vl": OcrConfig(
+        config_key="paddleocr_vl",
+        cache_key="paddleocr3.7_paddleocr_vl_0.9B",
+        kind="vl",
+    ),
+}
+
+# Backward-compatible aliases.
+CURRENT_ESLAV_CONFIG = OCR_CONFIGS["current_eslav"]
+
+
+@dataclass(frozen=True)
 class OcrLine:
     """One recognized text box."""
 
@@ -44,20 +84,24 @@ class OcrLine:
     box: tuple[tuple[float, float], ...] | None = None
 
 
-def engine_metadata(device: str) -> dict[str, Any]:
+def engine_metadata(device: str, config: OcrConfig | None = None) -> dict[str, Any]:
     """Report the exact OCR engine configuration for artifacts/reports."""
+
     import paddle
     import paddleocr
     import paddlex
 
-    return {
+    config = config or CURRENT_ESLAV_CONFIG
+    base = {
         "engine": "paddleocr",
         "paddleocr_version": paddleocr.__version__,
         "paddlex_version": paddlex.__version__,
         "paddle_version": paddle.__version__,
         "paddle_build": "paddlepaddle-gpu (official cu126 wheel)",
-        "detection_model": DETECTION_MODEL,
-        "recognition_model": RECOGNITION_MODEL,
+        "config_key": config.config_key,
+        "engine_kind": config.kind,
+        "detection_model": config.detection_model,
+        "recognition_model": config.recognition_model,
         "languages": "ru (East-Slavic Cyrillic) + Latin/digits",
         "device": device,
         "inference_settings": {
@@ -69,19 +113,29 @@ def engine_metadata(device: str) -> dict[str, Any]:
         "model_source": "PaddleOCR official model hoster, auto-download at first init",
         "cloud_apis_used": False,
     }
+    if config.kind == "vl":
+        base["languages"] = "multilingual (VL document parsing, no fixed rec alphabet)"
+        base["detection_model"] = "PaddleOCR-VL layout detection"
+        base["recognition_model"] = "PaddleOCR-VL 0.9B recognition"
+    return base
 
 
 class WineLabelOcr:
     """Thin deterministic wrapper around one PaddleOCR pipeline instance."""
 
-    def __init__(self, device: str = "gpu:0") -> None:
+    def __init__(
+        self,
+        device: str = "gpu:0",
+        detection_model: str = DETECTION_MODEL,
+        recognition_model: str = RECOGNITION_MODEL,
+    ) -> None:
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         from paddleocr import PaddleOCR
 
         self.device = device
         self._pipeline = PaddleOCR(
-            text_detection_model_name=DETECTION_MODEL,
-            text_recognition_model_name=RECOGNITION_MODEL,
+            text_detection_model_name=detection_model,
+            text_recognition_model_name=recognition_model,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
@@ -103,6 +157,55 @@ class WineLabelOcr:
                     OcrLine(text=str(text), confidence=score, box=_normalize_box(boxes[index] if index < len(boxes) else None))
                 )
         return lines
+
+
+class VlLabelOcr:
+    """PaddleOCR-VL document pipeline producing the same OcrLine records.
+
+    The VL pipeline does not emit per-line recognition confidences; each
+    recognized block is therefore cached with confidence 1.0 so that the
+    shared evidence-building (min-confidence 0.5) keeps every parsed block.
+    Markdown decorations and empty image/formula blocks are dropped.
+    """
+
+    _SKIP_LABELS = {"image", "figure", "seal", "chart", "formula", "table"}
+
+    def __init__(self, device: str = "gpu:0") -> None:
+        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        from paddleocr import PaddleOCRVL
+
+        self.device = device
+        self._pipeline = PaddleOCRVL(
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_queues=False,
+            device=device,
+            enable_mkldnn=False,
+        )
+
+    def predict_lines(self, image_path: str | Path) -> list[OcrLine]:
+        pages = list(self._pipeline.predict(str(image_path), use_queues=False, max_new_tokens=1024))
+        lines: list[OcrLine] = []
+        for page in pages:
+            for block in page.get("parsing_res_list", []) or []:
+                label = str(getattr(block, "label", "") or "").strip().lower()
+                if label in self._SKIP_LABELS:
+                    continue
+                content = str(getattr(block, "content", "") or "").strip()
+                if not content:
+                    continue
+                # Strip simple markdown decorations the VL parser emits.
+                content = content.lstrip("#").strip()
+                if not content:
+                    continue
+                lines.append(OcrLine(text=content, confidence=1.0, box=_normalize_box(getattr(block, "bbox", None))))
+        return lines
+
+
+def create_ocr_engine(config: OcrConfig, device: str = "gpu:0") -> WineLabelOcr | VlLabelOcr:
+    if config.kind == "vl":
+        return VlLabelOcr(device=device)
+    return WineLabelOcr(device=device, detection_model=config.detection_model, recognition_model=config.recognition_model)
 
 
 def _normalize_box(raw: Any) -> tuple[tuple[float, float], ...] | None:

@@ -117,6 +117,36 @@
 - Latency: clean ~13.8–14.0 ms mean (p95 26.3 ms); на generated с fallback 93.75% mean 35.3 ms — выше unconditional v1 (29.3 ms), т.к. два последовательных forward (1+2) вместо одного batch=3; все значения далеки от SLA 3 s.
 - Вердикт: confidence_gated_v1 зафиксирован как retrieval default; финальный confidence остаётся доступным для будущего пользовательского Smart Retry (отдельный слой). Vintage/subtype дизамбигуация hard-подмножества не решена (exact Top-1 9.38%) — следующий milestone: OCR/reranking. Артефакты: `artifacts/experiments/siglip2_confidence_gated_v1_20260919T204926Z/`, отчёт `reports/confidence_gated_v1_evaluation.md`.
 
+## Подтверждено encoder bake-off (2026-09-20)
+
+- Контролируемое сравнение 5 frozen encoders на неизменных benchmark-ах: current_siglip2 (base/224, reproduces frozen baseline exactly), dinov2_vitl14_reg, pe_core_l14_336, dfn5b_h14_378, siglip2_so400m_384. Протокол: per-model reference index (2042), cosine по L2-normalized global embeddings, single full image, официальный preprocessing каждой модели.
+- siglip2_so400m_384 — лучший: synthetic 95.10%, hard_v2 86.87% (+18.4pp), generated 73.44% / R@5 100% (vs 23.44%/47.66% у base). PE-Core-L14-336 идентичен на generated (73.44%/100%) и чуть ниже на clean. DINOv2-reg-L collapses на generated (Top-1 0.78%, median rank 339) — нет contrastive-робастности к domain shift.
+- Oracle-дополнение: so400m + current_siglip2 дают oracle R@5 100% на всех трёх (ошибки частично разные); но solo so400m сильнее любого ансамбля с base.
+- Ресурсы: fp16, peak VRAM 2.5 GB (so400m), latency 93 ms mean — SLA соблюдён.
+- Вердикт: siglip2_so400m_384 зафиксирован как новый retrieval backbone. Артефакты: `artifacts/experiments/encoder_bakeoff_20260920T143928Z/`, отчёт `reports/encoder_bakeoff_report.md`.
+
+## Подтверждено so400m OCR reranker milestone (2026-09-20)
+
+- PaddleOCR 3.7.0 GPU (PP-OCRv5_server_det + eslav_PP-OCRv5_mobile_rec), полностью локально; OCR-кэши построены один раз (2042 references: 1.81% empty, 48.1% с годом; 5362 queries: 98.3-99.2% с токенами).
+- Conservative text reranking поверх frozen SO400M Top-5 (OCR никогда не участвует в candidate generation). 5 фиксированных политик, калибровка на product/family-level splits, frozen: `reference_ocr_blend, alpha 0.30, vintage ±0.05, margin 0.05`.
+- Baseline воспроизведён точно (top1 agreement 1.0 на всех трёх). Итог: hard_v2 86.87% → 87.91% (+1.04pp, 16/4), synthetic 95.10% → 95.27% (22/15), generated 73.44% без изменений (0/0).
+- Vintage slice не двинулся ни одной политикой; весь hard-прирост — subtype disambiguation. Oracle: перфектный текстовый судья достигает только 72.7-75.0% на pilot32 vs 73.44% image baseline — OCR-сигнал на generated примерно на паритете.
+- Вердикт: OCR reranking зафиксирован как conservative post-retrieval stage; bottleneck — дискриминативное чтение стилизованной типографики, не fusion-веса.
+
+## Подтверждено OCR + reranker bake-off (2026-09-21)
+
+- OCR-конфигурации: A current_eslav (baseline), B cyrillic (тот же detector + cyrillic_PP-OCRv5_mobile_rec), C PaddleOCR-VL 0.9B (v1.6, локально). Реестр `ocr_engine.OCR_CONFIGS` с per-config cache keys (eslav key сохранён); инкрементальные crash-safe кэши (append+resume).
+- VL throughput ~4.9 s/image на RTX 4060 (GPU util 10-15% — autoregressive decode); полный кэш был бы ~8.5 ч, поэтому VL построен на references + hard_v2 + generated, synthetic_dev пропущен (disclosed). VL wrapper читает parsing_res_list блоки (confidence 1.0 — VL не даёт per-line confidences).
+- Дискриминация (target-vs-best-wrong text margin внутри SO400M Top-5): eslav 0.054 (59.9% target beats best wrong) на hard, cyrillic 57.6%, VL 41.1% с margin 0.003. VL читает меньше (75.8% non-empty на generated vs 99.2%) и хуже дискриминирует.
+- Vintage аудит: 103/2042 (5.04%) продуктов имеют год в title; ref-OCR год у 48.1%; согласование title×OCR года 94.9% (n=78) — ref-OCR год = derived evidence с provenance.
+- Structured reranker: 21 bounded feature (image margins, fuzzy/token/IDF-overlap, numeric overlap, vintage states, query quality) + standardized LogisticRegression; обучение только на calibration units (family-level hard 128, product-level synthetic 400, product-level pilot32 16; seed 20260920). heldout-половины + generated heldout — чистая оценка.
+- BGE cross-encoder BAAI/bge-reranker-v2-m3 (apache-2.0, fp16, ~1.1 GB VRAM): sigmoid score (query OCR text × candidate doc без slug), fusion grid image/text 0.9/0.1-0.7/0.3 на hard+generated.
+- Матрица (Top-1): hard_v2 — eslav+blend 87.91% (16/4), cyrillic+BGE0.3 88.17% (60/45), eslav+structured 87.30% (49/44), cyrillic+structured 87.48% (54/47), VL+blend 86.26% (4/11 net-negative); synthetic — structured до 95.54%, blend 95.27%; generated — 73.44% везде, кроме VL+structured 74.22% (generated-hard 39/64 → 40/64 единственный +1).
+- Feature importance LR: image_margin_top1 (-9.09) доминирует, затем ref_ocr_year_match (+0.88), query_has_year (-0.66) — реранкер опирается на image margin и год-согласованность.
+- Latency: eslav OCR 0.27 s mean (p95 0.23), cyrillic 0.17 s, VL 4.14 s, BGE +133 ms/query; полный пайплайн ~0.4 s mean — SLA 3 s соблюдён. Peak VRAM BGE 1108 MB.
+- Вердикт: **KEEP CURRENT OCR + CURRENT RERANKER** (eslav + reference_ocr_blend alpha 0.30). OCR upgrade gain не даёт; structured LR не превосходит blend по rescued/broken; BGE +0.26pp hard ценой generated-деградации и латентности. Bottleneck — стилизованная vintage-типографика (OCR не читает лучше) — следующий уровень: VLM/fine-tuned recognition, вне этого milestone. 15 новых тестов (234 total pass).
+- Артефакты: `artifacts/experiments/ocr_reranker_bakeoff_20260921T1/` (signal_cache, bge, structured, combos, summaries), диагностика `artifacts/experiments/ocr_reranker_bakeoff_diag/`; отчёт `reports/ocr_reranker_bakeoff_report.md`.
+
 ## Подтверждено OCR-reranking milestone на so400m backbone (2026-09-20)
 
 - Encoder bake-off зафиксировал `siglip2_so400m_384` как новый retrieval backbone: synthetic_dev Top-1 95.10%, hard_v2 86.87%, pilot32 73.44% (R@5 100% на generated). Следом реализован OCR + text/metadata reranking строго поверх готового Top-5: OCR не участвует в candidate generation.
@@ -128,3 +158,58 @@
 - Честные негативы: винтажные подмножества не сдвинулись ни при одной политике (pilot32 vintage 65.63%, hard_v2 vintage 76.47% — без изменений); весь прирост hard_v2 — subtype-дизамбигуация. Text-oracle на pilot32 72.7% (combined) / 75.0% (с винтажом) против 73.44% image baseline — OCR-сигнал на generated в лучшем случае на паритете, поэтому консервативный fusion корректно не переставляет. Ablation показал, что `combined_text_blend alpha 0.40` на полных множествах выше frozen-выбора (hard_v2 88.26%) — цена заморозки на calibration-половинах, зафиксирована как evidence.
 - Latency: retrieval ~41 ms + OCR ~237 ms + rerank 0.2 ms ≈ 280 ms mean (p95 ~264 ms) — существенно ниже SLA 3 s. Peak VRAM: retrieval 2226.9 MB (torch), OCR ~2.1 GB device-wide.
 - Вердикт: OCR-reranking принят как консервативный post-retrieval этап (net-positive на clean/hard, строго нейтрален на generated, SLA-safe). Vintage-дизамбигуация не решена; узкое место — дискриминативность OCR на стилизованных названиях/винтаже, а не веса fusion. Артефакты: `artifacts/experiments/so400m_ocr_reranker_20260920T193925Z/` (retrieval dumps `..._192004Z/`), отчёты `reports/so400m_ocr_reranker_report.md` и `reports/ocr_reranker_error_analysis.html`.
+
+## Подтверждено vintage disambiguation milestone (2026-09-22)
+
+- Создан diagnostic vintage challenge slice v1 (НЕ headline benchmark): hard_v2 46 queries / 17 vintage семей, generated 23 queries / 8 продуктов. Включение: target в vintage family AND в SO400M Top-5 AND same-family конкурент с другим известным годом тоже в Top-5. Артефакт: data/benchmarks/vintage_challenge_v1/ (перезаписывается из раннера), manifests в artifacts/experiments/vintage_disambiguation_20260922T1/.
+- Candidate year evidence с provenance (catalog_metadata / product_title / reference_ocr / multiple_sources_agree; конфликт -> unknown_conflict): 934/2042 (45.7%) продуктов с годом; hard vintage-family 33/34; pilot32 vintage 8/8.
+- Oracle ceiling (семантика без double counting): perfect query year спасает ВСЕ baseline-wrong vintage queries — 8/8 hard, 6/6 generated; потолок 100% на обоих слайсах (7/46 hard ambiguous: два члена семьи носят год target).
+- Detector-box retry (повторное распознавание собственных det-боксов query при 1x/2x/4x): correct-year 56.5% -> 58.7% (hard 4x), 47.8% -> 52.2% (generated) — прирост маргинальный; bottleneck сам correct-year rate, не разрешение.
+- Conservative family-scoped vintage rerank: +1 rescued / 0 broken на hard challenge, 0/0 на generated.
+- Reference-guided year crop (SIFT + ratio-test + RANSAC с validity gates): alignment success 100% hard / 95.7% generated (median 227/29 good matches); projected-crop year читается в 53/61 aligned hard crops, 30 совпадают с годом кандидата. Conservative candidate-specific evidence дал 1 swap: спасён кейс fanagoriya-primum-alveus-brut-2014 (2016-продукт на Top-1, проекции читают 2014) — +1/-0.
+- Latency: детекция 362 ms mean, SIFT 486 ms/кандидат; stage условный (same-family vintage ambiguity, ~10% hard queries) — SLA соблюдён.
+- Вердикт: ADD REFERENCE-GUIDED VINTAGE STAGE как conditional conservative layer (C). Gain мал, но строго неотрицателен; масштабируется до +8/-0 hard при росте correct-year OCR. Не принят как безусловный default; production trigger в API не заведён. 23 новых теста (257 total pass).
+- Артефакты: artifacts/experiments/vintage_disambiguation_20260922T1/; отчёт reports/vintage_disambiguation_report.md; модули src/recognition/vintage_disambiguation.py и src/recognition/reference_guided_year.py.
+
+## Подтверждено candidate-constrained vintage recognition (2026-09-23)
+
+- Восстановлены SIFT-aligned year crops детерминированно из frozen reference_guided_per_query.csv (69 queries: 61+21 query crops, 16+3 reference crops). Task framing: выбрать один allowed year из годов same-family Top-5 кандидатов; target identity на inference недоступна.
+- Методы на decided queries: current eslav OCR 12/12+12/12; SO400M crop matching 25/25+12/12 (100%); PE-Core идентично; DINOv2 local-patch 64-67% с 11 broken (гипотеза local-matching отвергнута); digit-only CRNN (2988 synthetic crops, constrained CTC) 56-67% (synthetic-to-real gap); VLM ceiling Qwen2-VL-2B (apache-2.0, fp16) 24/25+12/12 = 96-100%.
+- Решающая находка: bottleneck — availability, не recognition. 21/46 hard и 11/23 generated challenge queries не имеют year crop (eslav не прочитал reference год). 6/8 hard и 6/6 generated baseline-wrong — в этой no_crop группе, недостижимы ни одним crop-методом.
+- Family-safe swap: hard rescued 1/0 broken (2014/2016 fanagoriya), generated 0/0. Ekstra-2017 swap корректно заблокирован (оба члена носят 2017 — subtype случай).
+- Latency: crop matching 12-15 ms, digit ~2 ms, VLM 190-820 ms (ceiling only). Починено окружение: nvidia-cudnn-cu13 переустановлен (paddle installation подменил libcudnn.so.9 на stub, ломая torch LSTM).
+- Вердикт: USE VISUAL REFERENCE-CROP MATCHING (SO400M/PE-Core chooser в family-scoped vintage stage) + offline VLM pass по vintage reference images для создания недостающих year boxes — это двигает 6/8 hard и 6/6 generated baseline-wrong из недостижимых в достижимые. VLM как production runtime отвергнут (latency), но его 96-100% подтверждает наличие сигнала в crops. 257 tests pass.
+- Артефакты: artifacts/experiments/candidate_constrained_vintage_20260922T1/; отчёт reports/candidate_constrained_vintage_report.md; модули constrained_vintage.py, year_recognizer.py, vlm_year.py.
+
+## Подтвержден final ML sanity check: error audit + Top-5 SIFT geometry (2026-09-23)
+
+- Текущий production candidate воспроизведён в точности по сохранённым сигналам: hard_v2 1150/1150 и generated pilot32 128/128 совпадений полного Top-5 порядка. SIFT сравнивает только этот фиксированный Top-5; target не используется при inference.
+- Из 139 hard_v2 ошибок target уже находится в Top-5 у 137 (98.6%), retrieval failures — 2. Из 34 generated ошибок target в Top-5 у всех 34. Проверка изображений и family evidence отметила near-identical packaging в 114 hard и 16 generated ошибках; сохранённый OCR evidence вводит в заблуждение в 4 hard ошибках. Generated domain-shift метка означает контекст принятого stress scenario, не доказанную причинность.
+- SIFT descriptors offline закэшированы для всех 2042 usable references; fingerprint включает OpenCV version, параметры SIFT и SHA-256 каждого reference image. Посчитано ровно 5 пар на query: 5750 hard и 640 generated. Валидная homography: 85.1% hard и 54.8% generated.
+- Фиксированный fusion `current production + 0.40 × normalized geometry` дал hard_v2 87.91% -> 91.91% (+4.00 pp) и generated pilot32 73.44% -> 80.47% (+7.03 pp), сохранив R@5 (99.83% / 100%). Current->fusion transitions: 51/5 hard и 12/3 generated rescued/broken; суммарно 63/8.
+- Geometry-only Top-1: 89.74% hard, 76.56% generated. Среди текущих ошибок с target в Top-5 target имеет geo rank 1 у 45.3%/52.9%, rank ≤2 у 97.8%/88.2% (hard/generated). Selected fusion повышает hard vintage 76.5% -> 83.8%, subtype 90.7% -> 94.0%, other family 83.7% -> 88.7%; generated vintage 65.6% без изменений, subtype 56.2% -> 59.4%.
+- Synthetic post-selection sanity check: Top-1 95.27% -> 97.14%, R@5 без изменений 99.95%. Дополнительная latency query SIFT + пять матчей: 64.7 ms mean (hard), 217.2 ms (generated); расчётный полный pipeline p95 431.5/558.2 ms, SLA 3 s соблюдён.
+- Решение: **FIX GEOMETRIC RERANKER**, fixed weight 0.40; **CONTINUE ML только для подключения этого проверенного сигнала** к recognition path. Новые model/feature исследования отложить до появления реальных field queries. Production app path пока не подключён к выбранной политике. Полный suite: 274 passed.
+- Отчёт и визуальный audit: `reports/final_ml_geometric_reranker_report.md`, `reports/final_ml_error_audit.md`, `reports/final_ml_error_audit.html`. Experiment: `artifacts/experiments/final_ml_geometric_reranker_20260923T082259Z/`.
+
+## Подтвержден strong local visual Top-5 reranking milestone (2026-09-23)
+
+- Frozen current baseline воспроизведён точно: 1150/1150 hard_v2 и 128/128 generated Top-5 порядков; SIFT 0.40 воспроизведён для всех 1278 queries. Candidate set оставался ровно Top-5; generated R@5 остался 100%.
+- SIFT valid homography: 4891/5750 (85.06%) hard и 351/640 (54.84%) generated. Geometry-only Top-1: 89.74% / 76.56%; frozen current+SIFT: 91.91% / 80.47%.
+- LightGlue официальный README/license проверены: документированы SIFT, ALIKED, DISK; код/matcher weights Apache-2.0, DISK Apache-2.0, ALIKED BSD-3-Clause. Официальные clone/archive downloads завершились timeout при недоступной сети; LightGlue SIFT/ALIKED/DISK фактически не запускались и их метрики не заявляются.
+- Aligned SO400M и PE-Core по отдельности дали generated 80.47%, generated-hard 60.94%, по 1 rescued / 1 broken относительно SIFT. SO400M был быстрее по generated p95 (1077 ms против 1800 ms для PE-Core). Multiview mean/max дали 76.56% / 78.91%, с регрессией на generated-hard до 60.94%.
+- Из 25 remaining generated errors aligned SO400M выигрывает у incumbent на 8, PE-Core на 7, multiview mean на 4 и max на 2; oracle union измеренных новых сигналов — 12/25. До 90% нужно 13 net corrections: ceiling измеренного union — 115/128 = 89.84%. LightGlue в ceiling не входит, так как не был измерен.
+- Best fixed fusion grid candidate — `combined_local_signals_w0.10`: hard 92.00%, generated 80.47% (103/128), generated-hard 62.50%, 0 rescued / 0 broken; R@5 100%. Estimated total generated p95 — 2314 ms, ниже SLA 3 s. Метрика не достигает целевых 116/128.
+- Production recommendation remains `current_plus_sift_w0.40`; its already completed post-selection synthetic sanity check was reused because this verdict leaves SIFT unchanged: synthetic_dev 97.14% Top-1 / 99.95% R@5. The synthetic split was not used for local-weight selection or retuning.
+- Вердикт: **KEEP_SIFT**. Проверенные local alignment/multiview сигналы не добавили net Top-1 gains; production policy не менялась, fine-tuning не начинался. Для не протестированного LightGlue остаётся неизвестной потенциальная польза.
+- Артефакты: `artifacts/experiments/strong_local_visual_reranker_final_20260923T1000Z/`; отчёт `reports/strong_local_visual_reranker_report.md`; gallery `reports/local_visual_reranker_errors.html`; runner `scripts/run_strong_local_visual_reranker.py`; local signal module `src/recognition/local_visual_reranker.py`; tests `tests/test_local_visual_reranker.py`. Полный suite: 286 passed (3 sklearn deprecation warnings).
+
+## Получен новый набор без slug (2026-09-24)
+
+- В `data/new_data/` найдено **100** верхнеуровневых WebP-фотографий; рядом лежат 100 AppleDouble sidecars в `__MACOSX/`, это метаданные macOS, не разметка. У изображений нет slug manifest, EXIF-разметки или других подтверждённых target labels; точных дубликатов по SHA-256 нет.
+- Имена соответствуют шаблону `<числовой префикс>_<дата>_<время>.webp`; смысл префикса и происхождение/тип снимков пока **не подтверждены**. Префикс сохранён как исходный атрибут и не считается confidence или правильной меткой.
+- Задача трактуется как open-set: у фото может быть slug из основного набора, товара может не быть в каталоге, либо решение может остаться неопределённым. Каждое фото ранжировалось против всех 2042 usable references; image-only frozen SO400M и выбранный R16 сохраняют Top-5 кандидатов, query batch size=1. Top-1 совпал у моделей на **51/100** изображениях — это agreement, не accuracy.
+- Для новых фото нет калиброванного порога open-set отказа, поэтому по cosine сходству автоматически не выставляется «в каталоге нет». HTML review позволяет выбрать slug из полного каталога, отметить «slug в каталоге нет» или «пока неясно», сохраняет выборы в браузере и выгружает CSV. OCR/SIFT на новом наборе не запускались; raw-файлы не менялись, обучение и benchmark-selection не выполнялись.
+- Review artifacts: `artifacts/experiments/new_data_slug_audit_20260924/` (`slug_candidates.csv`, `slug_candidate_review.html`, `audit_metadata.json`, resumable `progress.json`); генератор: `scripts/audit_unlabeled_new_data.py`.
+- Из набора оформляется отдельный `new_data_open_set_v1`, не смешиваемый с прежними benchmark-ами. Новый threshold-free показатель `open_set_retrieval_auc` — площадь под кривой known exact classification rate vs unknown false-accept rate при пороге на max cosine similarity; диагностики: known Top-1 и Recall@5. Реализован evaluator `scripts/evaluate_new_data_open_set.py`; он сравнивает frozen SO400M и selected R16 image-only ранжирования и принимает human-reviewed CSV из HTML.
+- Числовой score пока не заявлен: исходные 100 фото без labels. Полный score можно считать только после разрешения всех кадров в `catalog_match` с подтверждённым slug либо `no_catalog_match`; `uncertain`/`unreviewed` останутся видимыми и дают только provisional report. Протокол: `data/benchmarks/new_data_open_set_v1/README.md`. Метрика не заменяет полный OCR/SIFT production evaluation.

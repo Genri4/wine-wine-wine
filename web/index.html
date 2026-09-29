@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#fbf7f3" />
+    <title>Своё Вино — сканер этикетки</title>
+    <link rel="stylesheet" href="styles.css?v=20260928-match-top-2" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="site-header">
+        <a class="wordmark" href="#home" data-go="start" aria-label="Своё Вино — на главную">
+          Своё Вино
+        </a>
+        <nav class="header-actions" aria-label="Основная навигация">
+          <button id="collection-nav" class="collection-nav" type="button">
+            Моя коллекция <span id="collection-count" class="collection-count">0</span>
+          </button>
+          <a class="catalog-link" href="https://vino-svoe.ru" target="_blank" rel="noreferrer">Каталог вин <span aria-hidden="true">↗</span></a>
+        </nav>
+      </header>
+      <p id="recognition-status" class="recognition-status" role="status" aria-live="polite"></p>
+
+      <section class="screen screen-start" data-screen="start" aria-labelledby="start-title">
+        <div class="start-copy">
+          <h1 id="start-title">Найдите вино по этикетке</h1>
+          <p class="intro-copy">Загрузите фото лицевой стороны — покажем карточку из каталога.</p>
+        </div>
+
+        <div id="compare-queue" class="compare-queue" role="status" hidden>
+          <span class="compare-queue-count">1/2</span>
+          <span>Добавлено: <strong id="compare-queued-title"></strong></span>
+          <button id="compare-cancel" type="button">Отменить</button>
+        </div>
+
+        <div class="capture-card">
+          <p class="capture-title">Фото этикетки</p>
+          <p class="capture-hint">JPG, PNG или WebP · до 20 МБ</p>
+          <label class="button button-primary upload-button" for="wine-photo">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v5h14v-5"/></svg>
+            Загрузить фото этикетки
+          </label>
+          <p class="selected-file" id="selected-file" aria-live="polite"></p>
+        </div>
+        <p class="photo-tips">Снимите этикетку прямо, без бликов и размытия.</p>
+      </section>
+
+      <section class="screen screen-result" data-screen="success" aria-labelledby="result-title" hidden>
+        <button class="back-link" type="button" data-go="start"><span aria-hidden="true">←</span> Сканер</button>
+        <h1 id="result-title">Совпадение найдено</h1>
+        <article class="wine-card">
+          <section class="personal-match-panel" aria-labelledby="match-title">
+            <div class="personal-match-heading">
+              <h2 id="match-title">Match for You</h2>
+              <div id="personal-match-score-wrap" class="personal-match-score-wrap" hidden>
+                <strong id="personal-match-score"></strong><span>/ 5</span>
+                <div id="personal-match-stars" class="personal-match-stars" role="img"></div>
+              </div>
+            </div>
+            <p id="personal-match-status" class="match-status" role="status" aria-live="polite">После сканирования покажем оценку именно этого вина.</p>
+            <p id="personal-match-reason" class="personal-match-reason" hidden></p>
+            <button id="personal-match-rate-current" class="text-button" type="button" hidden>Оценить это вино</button>
+          </section>
+          <div class="wine-main-content">
+            <div class="wine-image-wrap">
+              <img id="wine-image" alt="Этикетка найденного вина" />
+            </div>
+            <div class="wine-copy">
+              <span class="wine-type" id="wine-category"></span>
+              <h2 id="wine-title"></h2>
+              <p class="wine-maker" id="wine-maker"></p>
+              <div class="wine-details">
+                <div><span>Регион</span><strong id="wine-region"></strong></div>
+                <div><span>Сорт</span><strong id="wine-grape"></strong></div>
+              </div>
+              <section class="official-wine-details" aria-labelledby="wine-official-title">
+                <h3 id="wine-official-title">С официальной карточки «Своё Вино»</h3>
+                <div id="wine-official-attributes" class="official-attributes"></div>
+                <p id="wine-official-status" class="official-data-status" role="status" aria-live="polite">Загружаем характеристики с сайта…</p>
+              </section>
+              <a id="wine-link" class="text-link" target="_blank" rel="noreferrer">Открыть карточку вина <span aria-hidden="true">↗</span></a>
+              <div class="result-actions">
+                <button id="collection-action" class="button button-primary" type="button">Добавить в коллекцию</button>
+                <button id="compare-action" class="button button-secondary" type="button">Добавить к сравнению</button>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="screen screen-compare" data-screen="compare" aria-labelledby="compare-title" hidden>
+        <p class="screen-label">Сравнение двух бутылок</p>
+        <h1 id="compare-title">Сравнение вин</h1>
+        <div id="compare-cards" class="compare-grid"></div>
+        <button id="compare-reset" class="button button-primary" type="button">Новое сравнение</button>
+      </section>
+
+      <section class="screen screen-collection" data-screen="collection" aria-labelledby="collection-page-title" hidden>
+        <button class="back-link" type="button" data-go="start"><span aria-hidden="true">←</span> Сканер</button>
+        <h1 id="collection-page-title">Моя коллекция</h1>
+        <p class="collection-intro">Сохранённые вина и ваши оценки. Список хранится в этом браузере.</p>
+        <p id="collection-page-status" class="collection-feedback" role="status" aria-live="polite"></p>
+        <p id="collection-empty" class="collection-empty" hidden>Пока здесь пусто. Найдите вино по этикетке и добавьте его в коллекцию.</p>
+        <div id="collection-search-wrap" class="collection-search-wrap" hidden>
+          <label for="collection-search">Поиск по коллекции</label>
+          <input id="collection-search" type="search" placeholder="Название, производитель, регион…" autocomplete="off" />
+          <p id="collection-search-status" class="collection-search-status" role="status" aria-live="polite"></p>
+        </div>
+        <div id="collection-board" class="collection-board" hidden>
+          <section id="collection-want-group" class="collection-group" aria-labelledby="collection-want-title">
+            <h2 id="collection-want-title">Хочу попробовать <span id="collection-want-count"></span></h2>
+            <p id="collection-want-empty" class="collection-column-empty" hidden>Пока нет вин в этом списке.</p>
+            <div id="collection-want-list" class="collection-grid"></div>
+          </section>
+          <section id="collection-tried-group" class="collection-group" aria-labelledby="collection-tried-title">
+            <h2 id="collection-tried-title">Уже попробовал <span id="collection-tried-count"></span></h2>
+            <p id="collection-tried-empty" class="collection-column-empty" hidden>Пока нет вин в этом списке.</p>
+            <div id="collection-tried-list" class="collection-grid"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="screen screen-retry" data-screen="retry" aria-labelledby="retry-title" hidden>
+        <button class="back-link" type="button" data-go="start"><span aria-hidden="true">←</span> Сканер</button>
+        <p class="screen-label">Нужно переснять</p>
+        <h1 id="retry-title">Не удалось подтвердить вино</h1>
+        <p class="intro-copy" id="retry-summary">Сделайте новое фото этикетки.</p>
+
+        <div class="retry-advice" aria-live="polite">
+          <h2 id="retry-advice-title">Уберите блик с этикетки</h2>
+          <p id="retry-advice-copy">Немного измените угол съёмки или поверните бутылку, чтобы свет не отражался от этикетки.</p>
+          <div class="advice-steps" id="retry-steps"></div>
+        </div>
+
+        <div class="retry-photo" id="retry-photo-wrap" hidden>
+          <img id="query-preview" alt="Выбранное фото этикетки" />
+          <span>Ваше фото</span>
+        </div>
+        <label class="button button-primary full-button" for="wine-photo">Загрузить другое фото</label>
+      </section>
+
+      <section class="screen screen-notfound" data-screen="notfound" aria-labelledby="notfound-title" hidden>
+        <button class="back-link" type="button" data-go="start"><span aria-hidden="true">←</span> Сканер</button>
+        <p class="screen-label">Поиск завершён</p>
+        <h1 id="notfound-title">Точного совпадения нет</h1>
+        <p class="intro-copy" id="notfound-copy">Не удалось подтвердить точное совпадение. Возможно, вина пока нет в каталоге или на фото не видна важная часть этикетки.</p>
+        <label class="button button-primary full-button" for="wine-photo">Загрузить другое фото</label>
+      </section>
+
+      <dialog id="collection-dialog" class="collection-dialog" aria-labelledby="collection-dialog-title">
+        <div class="collection-dialog-header">
+          <div>
+            <p class="screen-label">Моя коллекция</p>
+            <h2 id="collection-dialog-title">Добавить в коллекцию</h2>
+          </div>
+          <button id="collection-close" class="dialog-close" type="button" aria-label="Закрыть окно">×</button>
+        </div>
+        <p id="collection-dialog-wine" class="collection-dialog-wine"></p>
+        <label class="collection-field" for="collection-status">Отметка
+          <select id="collection-status">
+            <option value="want_to_try">Хочу попробовать</option>
+            <option value="tried">Уже пробовал(а)</option>
+          </select>
+        </label>
+        <div id="collection-rating-field" class="collection-field" hidden>
+          <span>Ваша оценка</span>
+          <div id="collection-rating-picker" class="rating-picker" role="radiogroup" aria-label="Ваша оценка от 1 до 5">
+            <button type="button" data-rating="1" aria-label="1 из 5" aria-pressed="false">★</button>
+            <button type="button" data-rating="2" aria-label="2 из 5" aria-pressed="false">★</button>
+            <button type="button" data-rating="3" aria-label="3 из 5" aria-pressed="false">★</button>
+            <button type="button" data-rating="4" aria-label="4 из 5" aria-pressed="false">★</button>
+            <button type="button" data-rating="5" aria-label="5 из 5" aria-pressed="false">★</button>
+          </div>
+          <small id="collection-rating-hint">Выберите оценку от 1 до 5.</small>
+        </div>
+        <p id="collection-feedback" class="collection-feedback" role="status" aria-live="polite"></p>
+        <div class="collection-dialog-actions">
+          <button id="collection-cancel" class="button button-secondary" type="button">Отмена</button>
+          <button id="collection-save" class="button button-primary" type="button">Сохранить</button>
+        </div>
+      </dialog>
+
+    </main>
+    <input id="wine-photo" class="visually-hidden photo-input" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" aria-label="Выберите файл с фотографией винной этикетки" />
+    <script src="app.js?v=20260928-match-top-2"></script>
+  </body>
+</html>

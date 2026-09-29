@@ -1,5 +1,42 @@
 # Experiment history
 
+## 2026-09-25 — desktop product UI and Smart Retry checkpoint
+
+- Added personal wine collection: save a recognized wine as “want to try” or “tried” with a 1–5 rating; browse, edit and remove saved items. Data persists in this browser's local storage only.
+- Added sequential Compare: save one recognized bottle, scan a second, and view their catalog attributes side by side. Selection is session-only; no recognition or model behavior changed.
+- Simplified the desktop presentation: removed the large decorative scanner art and outer app frame, reduced repeated copy, and collapsed Match for You until requested. Recognition and retry behavior are unchanged.
+- Implemented desktop-only scanner screens with local image upload, Smart Retry guidance, one-card success and no-match states. Mobile adaptation remains explicitly out of scope.
+- Smart Retry now checks image decoding, minimum resolution and strong blur locally, then uses the frozen R8 + OCR + SIFT runtime for recognition and evidence-specific retry guidance. The demo outcome selector is removed.
+- Added Match for You: up to three catalog cards ranked by exact category/grape/region matches from the processed manifest; percentage means selected-attribute match, not wine quality. No backend persistence.
+- ML experiments remain frozen; validated R8 epoch 5 is the selected runtime. The desktop MVP is integrated and running locally. Human review of the new 100-image dataset is still needed before open-set thresholds can be field-calibrated.
+- Durable continuation notes: `reports/product_ui_checkpoint_20260925.md`; preview: `http://127.0.0.1:8765/web/`.
+
+## 2026-09-22 — vintage disambiguation / targeted OCR milestone
+
+- Built a diagnostic vintage challenge slice v1 (hard_v2: 46 queries / 17 vintage families; generated: 23 queries / 8 products): target in a vintage family AND in SO400M Top-5 AND a same-family competitor with a different known year is also in Top-5. Not a headline benchmark.
+- Candidate year evidence with provenance (catalog_metadata / product_title / reference_ocr / multiple_sources_agree; conflicts -> unknown_conflict): 934/2042 products have a year; hard vintage-family products 33/34; pilot32 vintage 8/8. Nothing invented.
+- Oracle ceiling (fixed double-counting semantics): a perfect query year rescues ALL baseline-wrong vintage queries - 8/8 on hard_v2, 6/6 on generated; ceiling 100% on both slices (7/46 hard queries ambiguous: two family members share the target year).
+- Detector-box retry (re-recognize query's own PP-OCRv5 det boxes at 1x/2x/4x with the frozen eslav recognizer): correct-year 56.5% -> 58.7% (hard, 4x) and 47.8% -> 52.2% (generated) - marginal; wrong-year stays 0-3; correct-year rate itself is the bottleneck.
+- Conservative family-scoped vintage rerank (swap only same-family members with different known years, confident query year): +1 rescued / 0 broken on hard_v2 challenge, 0/0 on generated.
+- Reference-guided year crop (SIFT+ratio-test+RANSAC, validity gates): alignment success 100% hard / 95.7% generated (median 227/29 good matches); projected-crop year reads 53/61 aligned hard crops, 30 matching the candidate's own year. Conservative candidate-specific evidence allowed 1 swap: rescued the fanagoriya-primum-alveus-brut-2014 case (2016 product at Top-1, projected crops read 2014 on both target and top1) - +1/-0.
+- Latency: full-image detection 362 ms mean / SIFT alignment 486 ms per candidate; the stage is conditional (same-family vintage ambiguity only, ~10% of hard queries), pipeline stays far below the 3 s SLA.
+- Verdict: ADD REFERENCE-GUIDED VINTAGE STAGE as a conditional conservative layer (C). Gain is small but strictly non-negative (+1/-0 hard, 0/-0 generated); scales to the full +8/-0 hard ceiling if correct-year OCR ever improves. Not adopted as unconditional default; production trigger not wired into the API path. 23 new tests (257 total pass).
+- Artifacts: `artifacts/experiments/vintage_disambiguation_20260922T1/`; report: `reports/vintage_disambiguation_report.md`.
+
+## 2026-09-21 — OCR + reranker bake-off
+
+- Built OCR config registry (`ocr_engine.OCR_CONFIGS`: current_eslav / cyrillic / paddleocr_vl) with per-config deterministic cache keys; eslav key unchanged (backward compatible). Build script generalized (`--ocr-config`), incremental append+resume caches (crash-safe).
+- Built cyrillic cache (2042 refs + 5362 queries); VL cache: references + hard_v2 + generated (synthetic skipped - ~4.9 s/image on RTX 4060, ~8.5 h for a full cache; disclosed, not silently substituted). VL wrapper parses `parsing_res_list` blocks (confidence 1.0, no per-line confidences in VL).
+- Discriminative diagnostics (not just coverage): inside the frozen SO400M Top-5, target-vs-best-wrong text margin - eslav 0.054/59.9% beats-best-wrong on hard_v2, cyrillic identical in usefulness (57.6%), VL far weaker (0.003 margin, 41.1%); VL coverage 75.8% vs 99.2% non-empty on generated.
+- Vintage audit: 103/2042 (5.0%) products have a title year; ref-OCR year coverage 48.1%; title-year x ref-OCR-year agreement 94.9% (n=78) - ref-OCR years usable as derived evidence with provenance.
+- Structured reranker: 21 bounded tabular features (image margins, fuzzy/token/IDF-weighted overlap, numeric overlap, vintage, query quality) + standardized LogisticRegression; trained only on calibration units (product-level generated, family-level hard_v2, product-level synthetic; seed 20260920).
+- BGE cross-encoder (BAAI/bge-reranker-v2-m3, apache-2.0, fp16): sigmoid scores over (query OCR text, candidate doc) pairs; fusion grid image/text 0.9/0.1-0.7/0.3 on hard+generated.
+- Matrix results (Top-1): hard_v2 - eslav+blend 87.91% (16/4), cyrillic+BGE0.3 88.17% (60/45, dirty profile), eslav+structured 87.30% (49/44), VL+blend 86.26% (4/11 net-negative); synthetic - structured up to 95.54%, blend 95.27%; generated - 73.44% unchanged except VL+structured 74.22% (40/64 generated-hard, +1 query at 4.1 s/image latency).
+- Feature importance: image_margin_top1 dominates (-9.09), then ref_ocr_year_match (+0.88), query_has_year (-0.66) - the model leans on image margin and year consistency, OCR adds a smaller bounded correction.
+- Latency: eslav OCR 0.27 s mean (p95 0.23), cyrillic 0.17 s, VL 4.14 s, BGE +133 ms/query; pipeline mean ~0.4 s (SLA 3 s safe); peak VRAM BGE 1108 MB.
+- Verdict: KEEP CURRENT OCR + CURRENT RERANKER (eslav + reference_ocr_blend alpha 0.30). OCR upgrade gives no gain; structured LR does not beat the hand-written blend on rescued/broken; BGE's +0.26pp hard comes with generated regression and latency. Vintage/subtype disambiguation bottleneck is OCR's inability to read stylized vintage typography better - a VLM/fine-tuned-recognition question, outside this milestone. 15 new tests (234 total pass).
+- Artifacts: `artifacts/experiments/ocr_reranker_bakeoff_20260921T1/` (combos, signal_cache, bge, structured), diagnostics `artifacts/experiments/ocr_reranker_bakeoff_diag/`; report `reports/ocr_reranker_bakeoff_report.md`.
+
 ## 2026-09-20 — so400m_ocr_reranker milestone
 
 - Implemented local OCR + text/metadata reranking over the frozen `siglip2_so400m_384` Top-5: OCR never participates in candidate generation; it only supplies conservative evidence inside the shortlist. New modules: `text_normalization.py` (NFKC/casefold/ё→е/punctuation-safe normalization preserving 4-digit years, transliteration reuse from catalog, deterministic vintage range filter 1900–2030), `text_signals.py` (7 bounded signals via RapidFuzz over Cyrillic+transliterated keys, confidence cutoff 0.5), `ocr_reranker.py` (5 fixed policies, per-query min-max image normalization, global alpha, bounded vintage bonus/penalty, text-margin guard that keeps the image winner without strong evidence), `ocr_engine.py` (PaddleOCR wrapper).
@@ -63,3 +100,49 @@
 - Added dataset diagnostics (`scripts/analyze_dataset.py`) and a sequential four-model benchmark (`scripts/benchmark.py`).
 - Evaluation now keeps a separate error artifact with the query image, expected/predicted item, and top-5 candidates with scores.
 - No real-dataset metrics were recorded: the organizer dataset format, split, target metric, and evaluation rules remain unknown.
+
+## 2026-09-23 — candidate-constrained vintage recognition milestone
+
+- Rebuilt SIFT-aligned year crops deterministically from the frozen reference_guided_per_query.csv (69 queries: 61+21 query crops, 16+3 reference crops). Constrained task framing: choose one allowed year from the same-family Top-5 candidates' catalog years; no target identity at inference.
+- Methods compared on decided queries: current eslav OCR 12/12+12/12; SO400M crop matching 25/25+12/12 (100%); PE-Core 25/25+12/12; DINOv2 local-patch 64-67% with 11 broken (local-matching hypothesis rejected); digit-only CRNN trained on 2988 synthetic year crops with constrained CTC decoding 56-67% (synthetic-to-real domain gap); VLM ceiling Qwen2-VL-2B-Instruct (apache-2.0, fp16, local) 24/25+12/12 = 96-100%.
+- DECISIVE finding: the bottleneck is crop availability, not recognition. 21/46 hard and 11/23 generated challenge queries have no year crop (eslav never read the reference year, so no reference year box existed). 6/8 hard and 6/6 generated baseline-wrong are in this no_crop group and unreachable by ANY crop method.
+- Family-safe swap: hard rescued 1 / 0 broken (2014/2016 fanagoriya case); the ekstra-2017 swap is correctly blocked (both members share year 2017 - subtype case). Generated 0/0 (no crops for wrong queries).
+- Latency: crop matching 12-15 ms/query, digit ~2 ms, VLM 190-820 ms (ceiling only). Peak VRAM VLM ~2.5 GB. Fixed environment: nvidia-cudnn-cu13 reinstalled (paddle install had stubbed libcudnn.so.9, breaking torch LSTM).
+- Verdict: USE VISUAL REFERENCE-CROP MATCHING (SO400M/PE-Core) as the chooser inside the family-scoped vintage stage, PLUS an offline VLM pass over vintage reference images to create missing year boxes - that moves 6/8 hard and 6/6 generated baseline-wrong queries from unreachable to reachable. VLM as production runtime rejected (latency), but its 96-100% accuracy validates that crops carry the signal. 257 tests pass.
+- Artifacts: artifacts/experiments/candidate_constrained_vintage_20260922T1/; report reports/candidate_constrained_vintage_report.md; modules src/recognition/constrained_vintage.py, year_recognizer.py, vlm_year.py.
+
+## 2026-09-23 — final ML sanity check: error audit + Top-5 SIFT geometry
+
+- Reproduced the frozen current production candidate exactly from saved Top-5 signals and the selected reference-OCR fusion: 1150/1150 hard_v2 and 128/128 generated pilot32 Top-5 orders matched. No candidate generation changed and no ground truth enters inference.
+- Audited 173 current Top-1 errors: hard_v2 139 (137 target-in-Top-5, 2 retrieval failures); generated pilot32 34 (34 target-in-Top-5, 0 retrieval failures). Pair-level reference-image evidence flags near-identical packaging in 114 hard and 16 generated errors; misleading OCR evidence in 4 hard errors. Generated F tags are scenario context, not proof of cause.
+- Precomputed SIFT descriptors offline for all 2042 usable references with an OpenCV/config/image-SHA256 cache fingerprint. Scored exactly five current candidates per query: hard 5750 pairs, generated 640 pairs. Valid homography rates: 4891/5750 (85.1%) hard; 351/640 (54.8%) generated.
+- Fixed-grid winner `current production + 0.40 × normalized geometry`: hard_v2 87.91% -> 91.91% (+4.00 pp); generated pilot32 73.44% -> 80.47% (+7.03 pp). R@5 stayed 99.83% / 100%. Transitions: hard 51 rescued / 5 broken; generated 12 / 3; combined 63 / 8 (7.9:1).
+- Geometry-only Top-1: 89.74% hard and 76.56% generated. Among current Top-1 errors with target in Top-5, target ranked first by geometry in 45.3%/52.9%, and in the top two in 97.8%/88.2% (hard/generated).
+- Family effects for selected fusion: hard vintage 76.5% -> 83.8%, subtype 90.7% -> 94.0%, other near-duplicate families 83.7% -> 88.7%; generated vintage 65.6% -> 65.6%, subtype 56.2% -> 59.4%. Synthetic post-selection regression check: 95.27% -> 97.14% Top-1; R@5 unchanged at 99.95%.
+- Added online geometry latency (query extraction + all five matchings): 64.7 ms mean / 153.7 ms p95 hard; 217.2 / 278.7 ms generated. Estimated full pipeline p95: 431.5 / 558.2 ms, below the 3 s SLA. Full test suite: 274 passed (3 unrelated sklearn deprecation warnings).
+- Verdict: **FIX GEOMETRIC RERANKER**, fixed weight 0.40. Recommendation: **CONTINUE ML only to wire this validated signal into the recognition path**; do not start another model/feature research track before collecting field queries. The app production path is not yet wired to this experiment output.
+- Artifacts: `artifacts/experiments/final_ml_geometric_reranker_20260923T082259Z/`; reports: `reports/final_ml_error_audit.md`, `reports/final_ml_error_audit.html`, `reports/final_ml_geometric_reranker_report.md`; implementation: `src/recognition/geometric_reranker.py`, `scripts/run_final_ml_sanity_check.py`; tests: `tests/test_geometric_reranker.py`.
+
+## 2026-09-23 — strong local visual Top-5 reranking
+
+- Reproduced the frozen baseline and SIFT 0.40 rankings exactly (1150/1150 hard_v2, 128/128 generated). Candidate generation, OCR and Top-5 stayed fixed.
+- Recomputed SIFT homography coverage: 85.06% hard (4891/5750 pairs), 54.84% generated (351/640). Aligned SO400M/PE-Core and fixed full/center85/center70 SO400M mean/max were scored over those same candidates.
+- Generated accuracy remained 80.47% (103/128) under the selected global `combined_local_signals_w0.10`; generated-hard 62.50%, hard 92.00%, R@5 100%, transitions 0 rescued / 0 broken. The highest fixed-grid alternatives did not yield a net gain; multiview alone regressed generated Top-1.
+- Among 25 remaining generated errors, aligned SO400M/PE-Core/multiview mean/max target wins were 8/7/4/2; measured new-signal oracle union 12/25, ceiling 89.84%, below the 116/128 success target. Estimated selected-policy total p95 was 2.314 s, under 3 s.
+- LightGlue’s official docs and licenses were reviewed, but official source/weight downloads timed out; SIFT/ALIKED/DISK+LightGlue were not run. The measured oracle excludes them.
+- Verdict: **KEEP_SIFT** for this milestone; do not integrate the measured local fusion and do not begin fine-tuning automatically. The result does not establish whether LightGlue can help.
+- Production recommendation stays `current_plus_sift_w0.40`; its prior post-selection synthetic sanity check was reused (synthetic_dev 97.14% Top-1 / 99.95% R@5) because this verdict does not change SIFT. Synthetic data was not used for local-weight selection.
+- Full test suite: 286 passed (3 existing sklearn deprecation warnings). Artifacts: `artifacts/experiments/strong_local_visual_reranker_final_20260923T1000Z/`; report/gallery: `reports/strong_local_visual_reranker_report.md`, `reports/local_visual_reranker_errors.html`.
+
+## 2026-09-25 — Smart Retry desktop MVP complete
+
+- Frozen candidate resolved for product wiring: validated R8 epoch 5 + current eslav reference-OCR blend + SIFT weight 0.40. R16 is not adopted. No fine-tuning or new ML experiment was started.
+- Added `src/recognition/smart_retry.py`: catalog retrieval from the saved R8 adapted reference embeddings, live query OCR, Top-5 SIFT fusion, image/retrieval corroboration, and evidence-specific retry guidance. It validates checkpoint, reference checksums, OCR coverage, SIFT config and OpenCV version before serving.
+- Added `scripts/serve_smart_retry.py`: localhost web/API service with rich `/api/recognize`, flat evaluator `/api/predict`, and `/api/health`. GPU OCR is the default for latency; CPU OCR remains an explicit fallback. No raw upload persistence.
+- Removed the demo-state control and hard-coded successful wine card; the UI now renders the actual catalog result and enables retry/no-match from recognition responses. Desktop-only; Match for You and Compare are available after recognition, with the personal collection added in the current product pass.
+- The agreement and photo-quality thresholds are explicitly heuristics, not field-calibrated probabilities. Human slug/no-match review of the new 100-photo dataset remains needed for a calibrated open-set threshold.
+- CPU OCR failed its first integration smoke on this 10 GB RAM host: one 1,336×2,000 catalog image exceeded 30 s and forced 6.1 GB swap. The server was stopped; default switched to the already selected local GPU OCR to meet the SLA. This is product runtime integration, not an OCR model change.
+- End-to-end API smoke using the catalog reference `zb-vajn-spumante-bryut-beloe` returned the expected slug with image+valid-SIFT agreement; flat `/api/predict` returned exactly `{"slug":"zb-vajn-spumante-bryut-beloe"}` in 1.10 s when warm. First cold recognition took 8.97 s, so GPU mode now performs one reference-image warm-up before opening the listener. `/api/health` and `/web/` both returned HTTP 200. The integration pass did not run the suite; the separate regression audit is recorded below.
+- Manual API checks also returned `retry/resolution` for a 320×240 image and `retry/unreadable` for corrupt bytes, verifying those targeted reason paths.
+- Full regression rerun: 334 tests passed, 2 pretrained-model reproduction tests deselected, 3 existing sklearn deprecation warnings. An unfiltered attempt was interrupted after 77 passes when it blocked on a socket read. Static UI checks and live recognition API smokes passed; browser click-through was unavailable because the Windows UI bridge rejected the WSL workspace URI.
+- Completion checkpoint: `reports/product_ui_checkpoint_20260925.md`. The desktop MVP and local integration are complete. Field-calibrated open-set/no-match thresholds remain dependent on human labels for the new 100-photo dataset.

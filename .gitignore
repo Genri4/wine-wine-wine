@@ -21,3 +21,28 @@ data/benchmarks/generated_stress_dev/generated_raw/
 data/benchmarks/generated_stress_dev/generated_raw_*/
 data/benchmarks/generated_stress_dev_pilot32/generated_raw/
 data/benchmarks/web_extra_dev/images/
+
+# Locally provided, unlabelled field data and human-review exports.
+data/new_data/
+data/benchmarks/new_data_open_set_v1/*
+!data/benchmarks/new_data_open_set_v1/README.md
+
+# Attached hackathon briefs and local credentials.
+context/*.pdf
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+~$*
+
+# Local diagnostics and temporary probes; keep the reviewed Markdown reports.
+reports/*.log
+reports/runtime_latency_aborted_*
+reports/final_ml_error_audit.html
+reports/lightglue_probe_errors.html
+reports/local_visual_reranker_errors.html
+reports/generated_stress_pilot32_error_analysis.html
+reports/ocr_reranker_error_analysis.html
+reports/hard_near_duplicate_dev_v2_cases.html
+scripts/tmp_probe_*.py

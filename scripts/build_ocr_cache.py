@@ -33,7 +33,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from recognition.cache import sha256_file  # noqa: E402
-from recognition.ocr_engine import OCR_MODEL_KEY, WineLabelOcr, engine_metadata  # noqa: E402
+from recognition.ocr_engine import (  # noqa: E402
+    OCR_CONFIGS,
+    OCR_MODEL_KEY,
+    create_ocr_engine,
+    engine_metadata,
+)
 from recognition.text_signals import (  # noqa: E402
     build_candidate_text_index,
     build_query_text_evidence,
@@ -63,6 +68,7 @@ def sha256_of_image(path: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build OCR caches (queries + catalog references)")
+    parser.add_argument("--ocr-config", default="current_eslav", choices=sorted(OCR_CONFIGS))
     parser.add_argument("--benchmarks", nargs="+", default=list(BENCHMARKS), choices=BENCHMARKS)
     parser.add_argument("--device", default="gpu:0")
     parser.add_argument("--skip-references", action="store_true")
@@ -70,11 +76,12 @@ def main() -> None:
     parser.add_argument("--audit-sample-size", type=int, default=50)
     args = parser.parse_args()
 
+    ocr_config = OCR_CONFIGS[args.ocr_config]
     project_root = PROJECT_ROOT
-    cache_root = project_root / "artifacts" / "ocr_cache" / OCR_MODEL_KEY
+    cache_root = project_root / "artifacts" / "ocr_cache" / ocr_config.cache_key
     cache_root.mkdir(parents=True, exist_ok=True)
     (cache_root / "ocr_engine.json").write_text(
-        json.dumps(engine_metadata(args.device), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(engine_metadata(args.device, ocr_config), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
@@ -87,45 +94,24 @@ def main() -> None:
 
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     print("Initializing OCR engine ...", flush=True)
-    engine = WineLabelOcr(device=args.device)
+    engine = create_ocr_engine(ocr_config, device=args.device)
 
     # ------------------------------------------------------------------
     # Reference OCR cache (Part C) + audit (Part X)
     # ------------------------------------------------------------------
     reference_cache_path = cache_root / "catalog_references" / "reference_ocr.jsonl"
     if not args.skip_references:
-        if reference_cache_path.is_file():
-            print(f"Reference cache exists, skipping ({reference_cache_path}); delete to rebuild.")
+        if reference_cache_path.is_file() and _count_lines(reference_cache_path) == len(catalog_items):
+            print(f"Reference cache complete, skipping ({reference_cache_path}); delete to rebuild.")
         else:
-            dedup: dict[str, list] = {}
-            records: list[dict] = []
-            started_all = time.time()
-            for position, item in enumerate(catalog_items, start=1):
-                digest = sha256_of_image(item.image_path)
-                if digest in dedup:
-                    lines, seconds, source = dedup[digest], None, "dedup"
-                else:
-                    started = time.time()
-                    lines = engine.predict_lines(item.image_path)
-                    seconds = time.time() - started
-                    dedup[digest] = lines
-                    source = "ocr"
-                records.append(
-                    {
-                        "slug": item.item_id,
-                        "image_path": str(item.image_path.relative_to(project_root)),
-                        "image_sha256": digest,
-                        "lines": lines_to_records(lines),
-                        "ocr_seconds": round(seconds, 3) if seconds is not None else None,
-                        "source": source,
-                    }
-                )
-                if position % 200 == 0 or position == len(catalog_items):
-                    print(f"  references {position}/{len(catalog_items)} ({time.time() - started_all:.0f}s)", flush=True)
-            reference_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with reference_cache_path.open("w", encoding="utf-8") as stream:
-                for record in records:
-                    stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+            incremental_build(
+                reference_cache_path,
+                identity_key="slug",
+                identities=[(item.item_id, item.image_path) for item in catalog_items],
+                engine=engine,
+                project_root=project_root,
+                progress_label="references",
+            )
 
         # Audit (runs whether the cache was just built or loaded).
         records = [json.loads(line) for line in reference_cache_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -148,48 +134,92 @@ def main() -> None:
         benchmark_cache_dir = cache_root / benchmark
         query_cache_path = benchmark_cache_dir / "query_ocr.jsonl"
         manifest_rows = _read_csv(_default_benchmark_manifest(project_root, benchmark, None))
-        if query_cache_path.is_file():
-            print(f"Query cache exists, skipping ({query_cache_path}); delete to rebuild.")
-        else:
-            dedup: dict[str, list] = {}
-            records: list[dict] = []
-            started_all = time.time()
-            for position, row in enumerate(manifest_rows, start=1):
-                image_path = _path(project_root, row["query_path"])
-                digest = sha256_of_image(image_path)
-                if digest in dedup:
-                    lines, seconds, source = dedup[digest], None, "dedup"
-                else:
-                    started = time.time()
-                    lines = engine.predict_lines(image_path)
-                    seconds = time.time() - started
-                    dedup[digest] = lines
-                    source = "ocr"
-                records.append(
-                    {
-                        "query_id": row["query_id"],
-                        "target_slug": row["target_slug"],
-                        "image_path": row["query_path"],
-                        "image_sha256": digest,
-                        "lines": lines_to_records(lines),
-                        "ocr_seconds": round(seconds, 3) if seconds is not None else None,
-                        "source": source,
-                    }
-                )
-                if position % 500 == 0 or position == len(manifest_rows):
-                    print(f"  {benchmark} {position}/{len(manifest_rows)} ({time.time() - started_all:.0f}s)", flush=True)
-            benchmark_cache_dir.mkdir(parents=True, exist_ok=True)
-            with query_cache_path.open("w", encoding="utf-8") as stream:
-                for record in records:
-                    stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-            _write_query_csv(benchmark_cache_dir / "query_ocr.csv", records)
-
+        if not query_cache_path.is_file():
+            incremental_build(
+                query_cache_path,
+                identity_key="query_id",
+                identities=[(row["query_id"], _path(project_root, row["query_path"])) for row in manifest_rows],
+                engine=engine,
+                project_root=project_root,
+                progress_label=benchmark,
+                extra_fields=lambda row, image_path: {"target_slug": row["target_slug"], "image_path": row["query_path"]},
+                manifest_rows=manifest_rows,
+            )
         records = [json.loads(line) for line in query_cache_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         coverage = coverage_report(records, manifest_rows, candidate_indexes, benchmark)
         (benchmark_cache_dir / "ocr_coverage.json").write_text(
             json.dumps(coverage, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         print(f"Coverage[{benchmark}]: {json.dumps(coverage['overall'])}")
+
+
+def _count_lines(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def incremental_build(
+    cache_path: Path,
+    identity_key: str,
+    identities: list[tuple[str, Path]],
+    engine,
+    project_root: Path,
+    progress_label: str,
+    extra_fields=None,
+    manifest_rows: list[dict] | None = None,
+) -> None:
+    """Crash-safe incremental OCR build: append each record immediately and
+    resume from the existing partial file (identity-keyed)."""
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    done: set[str] = set()
+    if cache_path.is_file():
+        with cache_path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                if line.strip():
+                    done.add(json.loads(line)[identity_key])
+        print(f"  resuming {progress_label}: {len(done)} records already cached", flush=True)
+
+    manifest_by_id = {row["query_id"]: row for row in (manifest_rows or [])}
+    dedup: dict[str, tuple] = {}
+    started_all = time.time()
+    pending = [(identity, path) for identity, path in identities if identity not in done]
+    with cache_path.open("a", encoding="utf-8") as stream:
+        for position, (identity, image_path) in enumerate(pending, start=1):
+            digest = sha256_of_image(image_path)
+            cached = dedup.get(digest)
+            if cached is not None:
+                lines, seconds = cached
+                source = "dedup"
+            else:
+                started = time.time()
+                lines = engine.predict_lines(image_path)
+                seconds = time.time() - started
+                dedup[digest] = (lines, seconds)
+                source = "ocr"
+            record = {
+                identity_key: identity,
+                "image_sha256": digest,
+                "lines": lines_to_records(lines),
+                "ocr_seconds": round(seconds, 3) if seconds is not None else None,
+                "source": source,
+            }
+            if identity_key == "slug":
+                record["image_path"] = str(image_path.relative_to(project_root))
+            else:
+                manifest_row = manifest_by_id.get(identity, {})
+                record["target_slug"] = manifest_row.get("target_slug", "")
+                record["image_path"] = manifest_row.get("query_path", "")
+            if extra_fields is not None:
+                record.update(extra_fields(manifest_row, image_path))
+            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+            stream.flush()
+            if position % 200 == 0 or position == len(pending):
+                print(
+                    f"  {progress_label} {position}/{len(pending)} ({time.time() - started_all:.0f}s)",
+                    flush=True,
+                )
 
 
 def reference_audit(records: list[dict]) -> dict:

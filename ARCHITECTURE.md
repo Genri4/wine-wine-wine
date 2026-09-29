@@ -1,186 +1,177 @@
-# Architecture boundaries
+# Архитектура My Wine
 
-Текущий воспроизводимый DEV pipeline проекта:
+Здесь описаны локальная версия Smart Retry и замороженный конвейер
+распознавания. Отчёты об экспериментах находятся в `reports/`; они не
+используются при обработке пользовательского запроса.
 
-```text
-canonical catalog
-→ synthetic DEV
-→ visual encoder (pretrained SigLIP2)
-→ cached catalog embeddings
-→ cosine retrieval (matrix multiplication)
-→ evaluator
-→ error analysis
+## Состав приложения
+
+```mermaid
+flowchart LR
+    Browser[Браузер на компьютере<br/>web/index.html + app.js + styles.css]
+    Server[Локальный HTTP-сервер на Python<br/>scripts/serve_smart_retry.py]
+    Runtime[SmartRetryRuntime<br/>src/recognition/smart_retry.py]
+    Vision[SigLIP2 SO400M + замороженный R8<br/>2 042 вектора эталонов → Top-5]
+    OCR[Локальный PaddleOCR<br/>текст запроса и эталонов]
+    SIFT[Локальный OpenCV SIFT<br/>признаки эталонов и геометрия запроса]
+    Gate[Проверка согласованности сигналов<br/>результат или Smart Retry]
+    Official[Официальная страница вина<br/>дополнительные сведения по запросу]
+    Storage[localStorage браузера<br/>коллекция и оценки]
+
+    Browser -->|POST /api/recognize с изображением| Server
+    Server --> Runtime
+    Runtime --> Vision
+    Runtime --> OCR
+    Runtime --> SIFT
+    Vision --> Gate
+    OCR --> Gate
+    SIFT --> Gate
+    Gate -->|один результат или подсказка пересъёмки| Server
+    Server --> Browser
+    Browser -->|GET /api/wine-details после распознавания| Server
+    Server -. отдельный необязательный запрос .-> Official
+    Browser --> Storage
 ```
 
-## Query view strategies
+Сервер небольшой: `ThreadingHTTPServer` из Python раздаёт настольный
+веб-интерфейс, проверяет запросы и вызывает модуль распознавания в том же
+процессе. В проекте нет базы данных, аккаунтов пользователей, фоновой очереди
+и обращения к внешним моделям распознавания.
 
-Query-side preprocessing is a frozen-encoder inference concern and is defined
-in `src/recognition/view_strategy.py`. Exactly one fixed strategy is applied
-to every query of a run; views and aggregation never depend on the target,
-scenario, or subset:
+## Обработка запроса
 
-- `baseline_full` — one full-image view; the frozen reference baseline.
-- `preprocessing_v1` — full + center 85% + center 70% views of the query,
-  encoded in one batched forward pass, ranked by mean similarity. Evaluated
-  in `reports/preprocessing_v1_evaluation.md`: strong safe recovery on
-  generated-stress queries (+14.8pp R@5 with 0 correct→wrong Top-1 flips) but
-  a real synthetic_dev (−3.8pp Top-1) and hard_v2 (−2.3pp Top-1) regression.
-  It is therefore **not** the unconditional default; a conditional
-  (confidence-gated) policy is a separate future decision.
-- `confidence_gated_v1` — the current retrieval default: run the full-image
-  ranking first, then fall back to crop85+crop70 (reusing the full embedding,
-  mean aggregation identical to preprocessing_v1) only when
-  `top1_score < 0.8824`. Frozen by product-level calibration
-  (`reports/confidence_gated_v1_evaluation.md`): captures the full
-  generated-stress gain on held-out products, keeps clean quality close to
-  the baseline, ~1.4 views/query on clean data. The gate reads only the
-  full-ranking score distribution; the confidence value stays available for
-  a future user-facing Smart Retry layer, which is a separate concern.
+1. Браузер принимает локальный файл и автоматически отправляет его как набор
+   байтов в `POST /api/recognize`. Загруженное фото не сохраняется в
+   репозитории.
+2. Обработчик проверяет тип содержимого и ограничивает запрос размером 20 МиБ.
+   При декодировании ограничиваются разрешение (40 мегапикселей), минимальная
+   длина большей стороны (640 пикселей) и максимальная длина стороны
+   (4 096 пикселей). Для нечитаемого, слишком маленького или сильно размытого
+   изображения модуль распознавания сразу возвращает `retry`.
+3. PaddleOCR обрабатывает уменьшенную копию изображения, у которой большая
+   сторона не превышает 1 600 пикселей. Энкодер и SIFT работают с декодированным
+   изображением. OCR не формирует список кандидатов каталога.
+4. SigLIP2 SO400M кодирует запрос. Сходство с замороженной матрицей векторов
+   эталонов вычисляется скалярным произведением нормализованных векторов; так
+   формируется детерминированная пятёрка лучших кандидатов (Top-5).
+5. Выбранное смешивание визуальных и эталонных OCR-признаков меняет порядок
+   пяти кандидатов. Затем SIFT оценивает геометрическое соответствие этой же
+   пятёрки; его оценка объединяется с оценками после OCR с фиксированным весом
+   `0.40`. Эти этапы не добавляют новых slug.
+6. Модуль распознавания сопоставляет итогового победителя с визуальным, OCR- и
+   геометрическим сигналами. Карточка `found` возвращается, когда за одного
+   победителя голосуют как минимум два из трёх сигналов. Иначе возвращается
+   причина для `retry` и предполагаемый slug для диагностики. Интерфейс
+   показывает подсказку пересъёмки, но не предлагает выбрать вино из Top-5.
+7. После распознавания браузер может запросить сведения с публичной страницы
+   вина через `GET /api/wine-details`. Запрос выполняется после поиска и не
+   входит в критичный по времени путь распознавания.
 
-The catalog/reference side is unchanged: one embedding per canonical
-reference image from the validated shared cache.
+Проверка согласованности — набор фиксированных правил, а не откалиброванная
+вероятность. OCR-сигнал использует минимальный отрыв эталонного текста `0.05`;
+SIFT-сигнал требует валидной геометрии и нормализованного отрыва не менее
+`0.15`. Порог согласованности и эвристики качества снимка не калибровались на
+выборке реальных фотографий с ручной проверкой.
 
-## OCR reranking stage (frozen so400m backbone)
+## Замороженные модели и локальные файлы
 
-A conservative post-retrieval stage sits between image Top-5 and the final
-answer; OCR never participates in candidate generation:
+Модуль распознавания использует выбранную модель R8 пятой эпохи и связанные с
+ней кэши:
 
-```text
-query image
-→ siglip2_so400m_384 retrieval (Top-5)
-→ cached query OCR (PaddleOCR 3.7 local, PP-OCRv5 server det + eslav rec)
-→ text signals per candidate (RapidFuzz, Cyrillic + transliterated keys)
-→ conservative fusion (global alpha, text-margin guard)
-→ final Top-1
-```
+- Базовый визуальный энкодер: `google/siglip2-so400m-patch14-384`, ревизия
+  `e8e487298228002f3d8a82e0cd5c8ea9c567f57f`. Модель загружается только из
+  локального кэша Hugging Face.
+- LoRA: проверенный чекпоинт с рангом 8
+  `artifacts/experiments/so400m_hard_negative_lora_20260923T203613Z/checkpoints/epoch_005.pt`.
+- Адаптированные эталонные векторы и метаданные:
+  `artifacts/experiments/frozen_baseline_forensics_20260924T044708Z/lora_evaluation/adapted_reference_cache/`.
+- Порядок slug каталога: `artifacts/reference_embeddings/siglip2_so400m_384/slugs.json`.
+- Эталонный OCR-кэш:
+  `artifacts/experiments/so400m_ocr_reranker_20260920T193925Z/ocr/reference_ocr.jsonl`.
+- Параметры SIFT и каталог признаков: конфигурация в
+  `artifacts/experiments/final_ml_geometric_reranker_20260923T082259Z/` и
+  указанный в ней путь к кэшу.
+- Эталонные фотографии каталога: 2 042 файла в
+  `data/processed/reference_images/`.
 
-Boundaries fixed in `src/recognition/ocr_reranker.py` and frozen by
-calibration (see `reports/so400m_ocr_reranker_report.md`):
+Модель, LoRA-веса, фотографии каталога и кэши — отдельные входные данные. При
+запуске модуль распознавания проверяет SHA-256 чекпоинта, соответствие slug
+каталога и кэшей, контрольные суммы всех эталонных изображений, размерность и
+нормализацию векторов, покрытие OCR, версию OpenCV, конфигурацию и отпечаток
+кэша SIFT. Перед открытием HTTP-порта версия на GPU прогревается на трёх
+эталонных изображениях. Скрипт `scripts/check_demo_assets.py` заранее проверяет
+наличие файлов и основные связи между кэшами; окончательной проверкой остаётся
+полный запуск сервера.
 
-- Policy set is closed: `image_only`, `metadata_text_blend`,
-  `reference_ocr_blend`, `combined_text_blend`, `combined_vintage_blend`.
-  Frozen default: `reference_ocr_blend, alpha 0.30`.
-- `alpha` is strictly global — one value per run, never per scenario,
-  family or product. No learned reranker, no LLM, no cloud APIs.
-- Reranking permutes the Top-5 only: the candidate set, Recall@5 and
-  Recall@10 are invariant by construction.
-- The text-margin guard keeps the image Top-1 unless the challenging
-  candidate's text evidence beats the image winner's by ≥ 0.05; empty OCR
-  can never reorder anything.
-- Query OCR and reference OCR are separate caches under
-  `artifacts/ocr_cache/<ocr_model>/`; OCR runs exactly once per unique image
-  (dedup by sha256) and is never re-run by reranking experiments.
-- Calibration is split-level: pilot32 by product (all 4 scenarios of one
-  product share a split), hard_v2 by whole family, synthetic by product,
-  fixed seed fingerprinted in `calibration_split.csv`.
-- Known limits (honest negatives): vintage disambiguation did not move
-  under any policy; the text oracle is at parity with the image baseline on
-  generated stress, so OCR there is non-discriminative rather than unread
-  (99% token coverage, median 9 tokens).
+Для воспроизведения показа нужны файлы, не хранящиеся в Git. Их точный перечень,
+передача зафиксированной версии модели Hugging Face и подготовка моделей
+PaddleOCR описаны в `web/README.md`. Нельзя отдельно заменять один из
+артефактов: чекпоинт, эталонные изображения и кэши связаны проверками
+контрольных сумм и отпечатков.
 
-Отдельная ветка generated stress отделена от baseline и вызывает image API
-только по явной команде пользователя:
+## API и границы интерфейса
 
-```text
-canonical catalog
-→ deterministic category×region selection
-→ generation_manifest + AITUNNEL image-edit pilot
-→ generated_raw/<output_filename>
-→ generation_runs/<run_id> runtime artifacts
-→ import/validation
-→ mandatory manual review
-→ accepted generated_stress_dev manifest
-→ same encoder/evaluator with per-scenario metrics
-```
+| Маршрут | Входные данные | Ответ или назначение |
+|---|---|---|
+| `GET /api/health` | Нет | `ready` или `busy`, длительность текущего и последнего запроса |
+| `POST /api/recognize` | Байты JPEG, PNG, WebP или `application/octet-stream` | Ответ для интерфейса: `found` с одной карточкой или `retry` с причиной |
+| `POST /api/predict` | Байты изображения поддерживаемого типа | Контракт проверяющих: плоский JSON `{"slug":"..."}` |
+| `GET /api/wine-details?slug=...` | Slug из каталога | Дополнительные сведения с соответствующей публичной страницы вина |
+| `GET /web/` | Нет | Статический настольный веб-интерфейс |
 
-До появления accepted images scored `generated_stress_dev/manifest.csv` не
-создаётся. Pending, rejected, corrupt и exact reference-copy samples не могут
-попасть в evaluation.
+Распознавание выполняется последовательно. Параллельный запрос получает HTTP
+503 и заголовок `Retry-After: 1`; браузер повторяет запрос после ответа о
+занятости. По умолчанию сервер привязан к `127.0.0.1`. Статические файлы
+разрешено раздавать только из `/web/`, манифеста каталога и папки эталонных
+изображений. У сервиса нет аутентификации, он предназначен для локального
+показа; не открывайте его в недоверенную сеть.
 
-## Текущие факты
+Функции в браузере отделены от распознавания:
 
-- Catalog v1 содержит 2 042 usable products с reference image; полный
-  canonical manifest содержит 2 103 products.
-- Synthetic DEV создаёт 2 query variants на product (4 084 queries) с
-  фиксированным seed. Это только внутренний сравнительный benchmark: он не
-  является официальной оценкой и не моделирует реальный пользовательский
-  снимок полностью.
-- Reference index строится только по исходным canonical reference images;
-  generated queries лежат отдельно, leakage assertion выполняется до baseline.
-- SigLIP2 используется zero-shot/pretrained: без fine-tuning, OCR,
-  inference augmentation и reranking.
-- Catalog embeddings кэшируются с model id/version, catalog checksum и
-  preprocessing config. При несовпадении metadata cache не используется.
-- Retrieval — точное normalized cosine через обычное matrix multiplication;
-  FAISS, pgvector и vector DB не требуются.
-- Query latency измеряется отдельно для embedding, retrieval и total; catalog
-  indexing не входит в per-query latency.
+- **Match for You** оценивает распознанное вино по пользовательским оценкам
+  типа вина, сорта и региона. Для каждой характеристики используется
+  небольшой нейтральный априорный рейтинг. Нужны оценки как минимум пяти вин;
+  это простая эвристика, а не обученная модель рекомендаций. Если текущее
+  вино уже оценено, интерфейс показывает личную оценку пользователя.
+- **Сравнение вин** хранит две распознанные позиции в памяти страницы и
+  показывает их характеристики из каталога и официального сайта, если они
+  доступны.
+- **Моя коллекция** хранит вина «Хочу попробовать» и уже опробованные вина с
+  оценками в `localStorage` этого браузера. Данные не синхронизируются с
+  сервером или другими устройствами.
 
-## Будущие границы и открытые решения
+Если официальный сайт недоступен, это не меняет результат распознавания. Для
+известных полей интерфейс использует данные каталога как запасной вариант;
+неизвестные характеристики остаются пустыми. Коллекция пользователя хранится
+только в браузере.
 
-- Официальный eval dataset и его окончательный split/metric contract ещё не
-  подтверждены этим DEV benchmark.
-- Preprocessing/normalization, OCR, additional signals и reranking — отдельные
-  будущие эксперименты, которые нельзя считать улучшением без общей evaluation.
-- UI, backend, database и production deployment пока не входят в milestone.
+## Оценка качества и ограничения выводов
 
-## Benchmark taxonomy
+Во внутреннем замере использовались 100 эталонных фотографий каталога,
+последовательно, после прогрева на локальной RTX 4060: `p50 — 304 мс`,
+`p95 — 1 117 мс`, `p99 — 1 237 мс`, максимум — `1 484 мс`. Все 100 запросов
+заняли меньше трёх секунд. На этой выборке 97 ответов были точными `found`,
+3 завершились `retry`, неверных `found` не было. Этот результат не доказывает
+точность на реальных пользовательских фото, пропускную способность при
+параллельных запросах или SLA на любом оборудовании.
 
-```text
-synthetic_dev
-  → laboratory/regression benchmark; queries derived from references
-hard_near_duplicate_dev
-  → fine-grained confusion benchmark; v1 reuses synthetic queries
-hard_near_duplicate_dev_v2
-  → strict v1 refinement; ≥2 strong signals and evidence-carrying families
-generated_stress_dev
-  → AITUNNEL/external image-edit plan; mandatory import/review gate before scoring
-generated_stress_dev_pilot32
-  → isolated 32-product generated-stress pilot; 16 representative products and
-    8 evidence-carrying hard families, with family-aware diagnostics
-web_extra_dev
-  → independent web-image benchmark only after exact identity and duplicate checks
-```
+Новый набор из 100 полевых фото ещё не размечен вручную по точному slug или
+отсутствию совпадения. Синтетические наборы (`synthetic_dev`), подборки вин из
+похожих семейств (`hard_near_duplicate_dev_v2`) и стрессовые изображения
+(`generated_stress_dev_pilot32`) служат для диагностического сравнения методов
+и не являются закрытым тестом организаторов. В презентации эти результаты
+нужно разделять.
 
-Эти наборы оценивают разные свойства и не сводятся в одну headline-метрику.
-Ни один из них не является accuracy на private test организаторов.
-`web_extra_dev` можно называть independent только для samples, прошедших
-reference-duplicate/leakage validation. Подробности collection и rejected
-кандидатов находятся в `data/benchmarks/web_extra_dev/README.md`.
-Текущая official-site выборка содержит 5 accepted samples; остальные
-кандидаты не входят в scored manifest после conservative duplicate checks.
+## Где находится код
 
-`generated_stress_dev_pilot32` строится скриптом
-`scripts/build_generated_stress_pilot32.py` в отдельной директории
-`data/benchmarks/generated_stress_dev_pilot32/`. Его 128 planned generations
-не считаются scored, пока внешний output не пройдет importer и обязательную
-ручную проверку. После accept общий evaluator reports overall/per-scenario
-metrics, а также `family_top1`, `family_recall_at_5`,
-`within_family_disambiguation_top1`, accuracy per family и
-внутрисемейные confusion pairs для hard-половины. Это производный stress
-benchmark, а не real-world independent dataset и не оценка private test.
-
-Подробное проектирование database, frontend, Docker, microservices и production deployment на этом этапе не требуется.
-
-## AITUNNEL generation boundary
-
-`scripts/generate_stress_aitunnel.py` читает только существующий
-`generation_manifest.csv`. Идентификаторы, prompts, slug и scenario не
-переписываются; runtime status хранится в отдельном
-`data/benchmarks/generated_stress_dev/generation_runs/<run_id>/`.
-
-Без `--dry-run` credential обязателен в env `AITUNNEL_API_KEY`. Сначала
-выбираются первые 5 products из существующего plan (20 requests); полный scope
-возможен только через явный `--all`. На каждый запрос отправляются reference
-image reference и prompt в `POST /v1/images/generations` через
-`input_references` с model
-`gpt-image-2.5-sunburst`, quality `low`, size `1024x1024`. Output проходит
-atomic write и image validation. Error policy: retry только transport/408/429/
-5xx и transient malformed responses с ограничением backoff; 401/402/403 и
-unsupported model/parameter останавливают run. API key никогда не попадает в
-runtime CSV/JSON.
-
-После генерации importer всё равно оставляет rows `pending`; только человек
-может выставить `accepted`. Generated images являются производными от
-reference catalog и не должны использоваться для training/fine-tuning frozen
-benchmark.
+- `scripts/serve_smart_retry.py` — локальный HTTP-сервер и обработка маршрутов.
+- `src/recognition/smart_retry.py` — проверка файлов при запуске, ранжирование
+  и правило согласованности сигналов.
+- `src/recognition/so400m_lora.py`, `text_signals.py`,
+  `geometric_reranker.py` — адаптер модели, OCR-сигналы и геометрический
+  пересчёт.
+- `src/recognition/official_wine_details.py` — получение сведений с публичной
+  страницы после распознавания.
+- `web/` — интерфейс, Match for You, сравнение вин, коллекция и стили.
+- `scripts/check_demo_assets.py` — предварительная проверка локальных файлов.
+- `reports/` — датированные отчёты об экспериментах, интерфейсе и скорости.
